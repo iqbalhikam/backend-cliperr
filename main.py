@@ -61,7 +61,7 @@ async def download_clip(req: ClipRequest, background_tasks: BackgroundTasks):
         ydl_opts = {
             # PERUBAHAN 1: Gunakan format 'best' (file tunggal) alih-alih memisah video & audio.
             # Ini jauh lebih stabil untuk dipotong oleh FFmpeg pada video Live/Replay.
-            'format': 'best[1440]/best',
+            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
             
             'outtmpl': unique_name,
             'download_ranges': lambda info, ydl_ops: [{"start_time": start_sec, "end_time": end_sec}],
