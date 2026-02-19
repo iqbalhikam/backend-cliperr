@@ -82,11 +82,7 @@ def download_clip(req: ClipRequest, background_tasks: BackgroundTasks):
             # TAMBAHKAN BARIS INI UNTUK MEMBACA COOKIES
             'cookiefile': 'cookies.txt',
             
-            'extractor_args': {
-                'youtube': {
-                    'player_client': [ 'web' ]
-                }
-            }
+            
         }
 
         # Eksekusi Download
