@@ -8,6 +8,16 @@ import uuid
 
 app = FastAPI()
 
+# --- TAMBAHAN BARU: Membuat cookies.txt otomatis dari .env ---
+cookie_content = os.getenv("YOUTUBE_COOKIES")
+if cookie_content:
+    with open("cookies.txt", "w") as f:
+        f.write(cookie_content)
+    print("✅ File cookies.txt berhasil di-generate dari Environment Variable!")
+else:
+    print("⚠️ WARNING: YOUTUBE_COOKIES tidak ditemukan di Environment Variables!")
+# -------------------------------------------------------------
+
 # 1. Setup CORS (Agar Next.js bisa akses)
 app.add_middleware(
     CORSMiddleware,
@@ -62,15 +72,16 @@ def download_clip(req: ClipRequest, background_tasks: BackgroundTasks):
 
         ydl_opts = {
             'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-            
-            # 2. Pengaman tambahan agar hasil gabungan FFmpeg mutlak menjadi .mp4
             'merge_output_format': 'mp4',
-            
             'outtmpl': unique_name,
             'download_ranges': lambda info, ydl_ops: [{"start_time": start_sec, "end_time": end_sec}],
             'force_ipv4': True,
             'noplaylist': True,
             'quiet': True,
+            
+            # TAMBAHKAN BARIS INI UNTUK MEMBACA COOKIES
+            'cookiefile': 'cookies.txt',
+            
             'extractor_args': {
                 'youtube': {
                     'player_client': ['android', 'web']
