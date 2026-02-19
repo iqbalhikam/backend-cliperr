@@ -78,11 +78,17 @@ def download_clip(req: ClipRequest, background_tasks: BackgroundTasks):
             'force_ipv4': True,
             'noplaylist': True,
             'quiet': True,
-            
-            # TAMBAHKAN BARIS INI UNTUK MEMBACA COOKIES
             'cookiefile': 'cookies.txt',
             
+            # --- TAMBAHAN BARU: Menyamar sebagai Google Chrome asli ---
+            'impersonate': 'chrome',
             
+            # Kita coba gunakan client tv atau ios yang terkadang lolos dari teka-teki JS
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['ios', 'tv', 'web']
+                }
+            }
         }
 
         # Eksekusi Download
