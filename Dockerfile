@@ -6,6 +6,11 @@ RUN apt-get update && \
     apt-get install -y ffmpeg && \
     rm -rf /var/lib/apt/lists/*
 
+# Tambahkan nodejs di baris apt-get install
+RUN apt-get update && \
+    apt-get install -y ffmpeg nodejs && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
 # 2. Setup User & Permission (Wajib di Hugging Face)
 # HF menjalankan aplikasi sebagai user ID 1000, bukan root.
 # Kita harus buat user itu dan kasih izin tulis folder.
