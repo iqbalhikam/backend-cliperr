@@ -59,12 +59,22 @@ async def download_clip(req: ClipRequest, background_tasks: BackgroundTasks):
 
         # Opsi yt-dlp (Sama kuatnya dengan yang sebelumnya)
         ydl_opts = {
-            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]',
+            # PERUBAHAN 1: Gunakan format 'best' (file tunggal) alih-alih memisah video & audio.
+            # Ini jauh lebih stabil untuk dipotong oleh FFmpeg pada video Live/Replay.
+            'format': 'best[height<=720]/best',
+            
             'outtmpl': unique_name,
             'download_ranges': lambda info, ydl_ops: [{"start_time": start_sec, "end_time": end_sec}],
-            'force_ipv4': True,  # Anti error DNS
+            'force_ipv4': True,
             'noplaylist': True,
             'quiet': True,
+            
+            # PERUBAHAN 2: Akali deteksi client YouTube untuk menghindari SABR streaming
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['android', 'web']
+                }
+            }
         }
 
         # Eksekusi Download
