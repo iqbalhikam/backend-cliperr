@@ -1,0 +1,20 @@
+# Environments
+venv/
+env/
+.env
+
+# Python Cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# File Media / Output Sementara
+*.mp4
+*.webm
+*.mkv
+clip_*.mp4
+
+# OS generated files (Opsional tapi disarankan)
+.DS_Store
+Thumbs.db
