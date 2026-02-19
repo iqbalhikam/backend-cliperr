@@ -84,7 +84,7 @@ def download_clip(req: ClipRequest, background_tasks: BackgroundTasks):
             
             'extractor_args': {
                 'youtube': {
-                    'player_client': ['web']
+                    'player_client': [ 'web' ]
                 }
             }
         }
