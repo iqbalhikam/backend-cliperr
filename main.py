@@ -1,24 +1,37 @@
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, HttpUrl
-import subprocess, uuid, os, yt_dlp, time
+import yt_dlp
+import subprocess
+import uuid
+import os
+import time
+import logging
+
+# ======================
+# LOGGING SETUP
+# ======================
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s"
+)
 
 app = FastAPI()
 
-# =====================
-# REQUEST MODEL
-# =====================
+# ======================
+# MODEL
+# ======================
 class ClipRequest(BaseModel):
     url: HttpUrl
     start: str
     end: str
 
-
-# =====================
+# ======================
 # TIME PARSER
-# =====================
+# ======================
 def parse_time(t:str)->float:
-    t=str(t)
+    t=str(t).strip()
+
     if t.isdigit():
         return float(t)
 
@@ -28,49 +41,75 @@ def parse_time(t:str)->float:
         return p[0]*3600+p[1]*60+p[2]
     if len(p)==2:
         return p[0]*60+p[1]
+
     return p[0]
 
-
-# =====================
-# DELETE FILE LATER
-# =====================
+# ======================
+# CLEANUP
+# ======================
 def cleanup(path):
-    time.sleep(8)
-    if os.path.exists(path):
-        os.remove(path)
+    time.sleep(10)
+    try:
+        if os.path.exists(path):
+            os.remove(path)
+            logging.info(f"Deleted temp file {path}")
+    except Exception as e:
+        logging.error(f"Cleanup error {e}")
 
+# ======================
+# GET BEST STREAM (REAL PRO)
+# ======================
+def get_best_stream(url):
 
-# =====================
-# GET BEST STREAM URL
-# =====================
-def get_best_stream(url:str):
+    logging.info("Extracting formats from YouTube...")
 
-    ydl_opts={
-        "quiet":True,
-        "noplaylist":True,
-        "extractor_args":{
-            "youtube":{
-                "player_client":["android","ios","tv","web"]
-            }
-        }
-    }
-
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+    with yt_dlp.YoutubeDL({"quiet":True}) as ydl:
         info=ydl.extract_info(url,download=False)
 
-        # ambil BEST video+audio
-        if "requested_formats" in info:
-            v=info["requested_formats"][0]["url"]
-            a=info["requested_formats"][1]["url"]
-            return v,a
+    formats=info["formats"]
 
-        # fallback single stream
-        return info["url"],None
+    # VIDEO ONLY
+    videos=[
+        f for f in formats
+        if f.get("vcodec")!="none" and f.get("acodec")=="none"
+    ]
 
+    # SORT BEST RESOLUTION + BITRATE
+    videos=sorted(
+        videos,
+        key=lambda x:(x.get("height",0),x.get("tbr",0)),
+        reverse=True
+    )
 
-# =====================
+    best_video=videos[0]
+
+    # AUDIO ONLY
+    audios=[
+        f for f in formats
+        if f.get("acodec")!="none" and f.get("vcodec")=="none"
+    ]
+
+    audios=sorted(
+        audios,
+        key=lambda x:x.get("tbr",0),
+        reverse=True
+    )
+
+    best_audio=audios[0]
+
+    logging.info(
+        f"BEST VIDEO → {best_video.get('height')}p  bitrate={best_video.get('tbr')}"
+    )
+
+    logging.info(
+        f"BEST AUDIO → bitrate={best_audio.get('tbr')}"
+    )
+
+    return best_video["url"],best_audio["url"]
+
+# ======================
 # MAIN API
-# =====================
+# ======================
 @app.post("/clip")
 def clip(req:ClipRequest, bg:BackgroundTasks):
 
@@ -80,55 +119,62 @@ def clip(req:ClipRequest, bg:BackgroundTasks):
     if end<=start:
         raise HTTPException(400,"End harus lebih besar")
 
-    if end-start>180:
-        raise HTTPException(400,"Max 3 menit")
+    duration=end-start
+
+    if duration>180:
+        raise HTTPException(400,"Max clip 180 detik")
 
     filename=f"clip_{uuid.uuid4().hex}.mp4"
 
     try:
 
+        logging.info("====================================")
+        logging.info(f"CLIP REQUEST")
+        logging.info(f"URL: {req.url}")
+        logging.info(f"START: {start}")
+        logging.info(f"END: {end}")
+        logging.info("====================================")
+
         video_url,audio_url=get_best_stream(str(req.url))
 
-        # ===== FFmpeg PRO CLIP =====
-        # TANPA encode ulang
-        if audio_url:
+        cmd=[
+            "ffmpeg",
+            "-ss",str(start),
+            "-to",str(end),
+            "-i",video_url,
+            "-ss",str(start),
+            "-to",str(end),
+            "-i",audio_url,
+            "-map","0:v",
+            "-map","1:a",
+            "-c","copy",
+            "-avoid_negative_ts","1",
+            filename
+        ]
 
-            cmd=[
-                "ffmpeg",
-                "-ss",str(start),
-                "-to",str(end),
-                "-i",video_url,
-                "-ss",str(start),
-                "-to",str(end),
-                "-i",audio_url,
-                "-map","0:v",
-                "-map","1:a",
-                "-c","copy",
-                "-avoid_negative_ts","1",
-                filename
-            ]
+        logging.info("Running FFmpeg...")
+        logging.info(" ".join(cmd))
 
-        else:
-
-            cmd=[
-                "ffmpeg",
-                "-ss",str(start),
-                "-to",str(end),
-                "-i",video_url,
-                "-c","copy",
-                filename
-            ]
-
-        subprocess.run(cmd,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+        subprocess.run(cmd)
 
         if not os.path.exists(filename):
-            raise HTTPException(500,"FFmpeg gagal")
+            raise HTTPException(500,"FFmpeg gagal membuat file")
+
+        size=os.path.getsize(filename)/1024/1024
+        logging.info(f"Clip created → {size:.2f} MB")
 
         bg.add_task(cleanup,filename)
 
-        return FileResponse(filename,filename="clip.mp4")
+        return FileResponse(
+            filename,
+            filename="clip.mp4",
+            media_type="video/mp4"
+        )
 
     except Exception as e:
+        logging.error(f"ERROR: {e}")
+
         if os.path.exists(filename):
             os.remove(filename)
+
         raise HTTPException(500,str(e))
