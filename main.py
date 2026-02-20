@@ -1,153 +1,134 @@
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse
-from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, HttpUrl
-import yt_dlp
-import os
-import uuid
-import time
+import subprocess, uuid, os, yt_dlp, time
 
 app = FastAPI()
 
-# ========================
-# GENERATE COOKIES
-# ========================
-cookie_content = os.getenv("YOUTUBE_COOKIES")
-COOKIE_PATH = "cookies.txt"
-
-if cookie_content and not os.path.exists(COOKIE_PATH):
-    with open(COOKIE_PATH, "w", encoding="utf-8") as f:
-        f.write(cookie_content)
-    print("cookies.txt generated")
-
-# ========================
-# CORS
-# ========================
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# ========================
+# =====================
 # REQUEST MODEL
-# ========================
+# =====================
 class ClipRequest(BaseModel):
     url: HttpUrl
     start: str
     end: str
 
-# ========================
-# SAFE DELETE
-# ========================
-def remove_file(path: str):
-    time.sleep(5)  # beri waktu agar download benar2 selesai
-    try:
-        if os.path.exists(path):
-            os.remove(path)
-            print("deleted:", path)
-    except Exception as e:
-        print("delete fail:", e)
 
-# ========================
-# TIME PARSER STRONG VERSION
-# ========================
-def parse_time(t: str) -> float:
-    t = str(t).strip()
-
-    # detik langsung
+# =====================
+# TIME PARSER
+# =====================
+def parse_time(t:str)->float:
+    t=str(t)
     if t.isdigit():
         return float(t)
 
-    # format HH:MM:SS / MM:SS
-    parts = t.split(":")
-    parts = [float(x) for x in parts]
+    p=[float(x) for x in t.split(":")]
 
-    if len(parts) == 3:
-        return parts[0]*3600 + parts[1]*60 + parts[2]
-    elif len(parts) == 2:
-        return parts[0]*60 + parts[1]
-    elif len(parts) == 1:
-        return parts[0]
+    if len(p)==3:
+        return p[0]*3600+p[1]*60+p[2]
+    if len(p)==2:
+        return p[0]*60+p[1]
+    return p[0]
 
-    raise ValueError("Invalid time format")
 
-# ========================
-# MAIN ENDPOINT
-# ========================
-@app.post("/download-clip")
-def download_clip(req: ClipRequest, background_tasks: BackgroundTasks):
+# =====================
+# DELETE FILE LATER
+# =====================
+def cleanup(path):
+    time.sleep(8)
+    if os.path.exists(path):
+        os.remove(path)
 
-    filename = f"clip_{uuid.uuid4().hex}.mp4"
+
+# =====================
+# GET BEST STREAM URL
+# =====================
+def get_best_stream(url:str):
+
+    ydl_opts={
+        "quiet":True,
+        "noplaylist":True,
+        "extractor_args":{
+            "youtube":{
+                "player_client":["android","ios","tv","web"]
+            }
+        }
+    }
+
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info=ydl.extract_info(url,download=False)
+
+        # ambil BEST video+audio
+        if "requested_formats" in info:
+            v=info["requested_formats"][0]["url"]
+            a=info["requested_formats"][1]["url"]
+            return v,a
+
+        # fallback single stream
+        return info["url"],None
+
+
+# =====================
+# MAIN API
+# =====================
+@app.post("/clip")
+def clip(req:ClipRequest, bg:BackgroundTasks):
+
+    start=parse_time(req.start)
+    end=parse_time(req.end)
+
+    if end<=start:
+        raise HTTPException(400,"End harus lebih besar")
+
+    if end-start>180:
+        raise HTTPException(400,"Max 3 menit")
+
+    filename=f"clip_{uuid.uuid4().hex}.mp4"
 
     try:
-        start = parse_time(req.start)
-        end = parse_time(req.end)
 
-        duration = end - start
+        video_url,audio_url=get_best_stream(str(req.url))
 
-        # ==== SERVER PROTECTION RULES ====
-        if duration <= 0:
-            raise HTTPException(400, "End harus lebih besar dari start")
+        # ===== FFmpeg PRO CLIP =====
+        # TANPA encode ulang
+        if audio_url:
 
-        if duration > 180:
-            raise HTTPException(400, "Max clip 180 detik")
+            cmd=[
+                "ffmpeg",
+                "-ss",str(start),
+                "-to",str(end),
+                "-i",video_url,
+                "-ss",str(start),
+                "-to",str(end),
+                "-i",audio_url,
+                "-map","0:v",
+                "-map","1:a",
+                "-c","copy",
+                "-avoid_negative_ts","1",
+                filename
+            ]
 
-        print("clip:", req.url, start, end)
+        else:
 
-        ydl_opts = {
+            cmd=[
+                "ffmpeg",
+                "-ss",str(start),
+                "-to",str(end),
+                "-i",video_url,
+                "-c","copy",
+                filename
+            ]
 
-            # kualitas tertinggi
-            'format': 'bv*+ba/b',
-
-            # output
-            'outtmpl': filename,
-
-            # CUT LANGSUNG (SUPER PENTING)
-            'download_ranges': lambda info, ydl: [{
-                "start_time": start,
-                "end_time": end
-            }],
-
-            'force_keyframes_at_cuts': True,
-
-            'merge_output_format': 'mp4',
-            'noplaylist': True,
-            'quiet': True,
-            'nocheckcertificate': True,
-            'cookiefile': COOKIE_PATH if os.path.exists(COOKIE_PATH) else None,
-
-            # anti blocking youtube
-            'extractor_args': {
-                'youtube': {
-                    'player_client': ['ios','android','tv','web']
-                }
-            },
-
-            'concurrent_fragment_downloads': 3,
-        }
-
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([str(req.url)])
+        subprocess.run(cmd,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
 
         if not os.path.exists(filename):
-            raise HTTPException(500, "Clip gagal dibuat")
+            raise HTTPException(500,"FFmpeg gagal")
 
-        background_tasks.add_task(remove_file, filename)
+        bg.add_task(cleanup,filename)
 
-        return FileResponse(
-            filename,
-            filename="clip.mp4",
-            media_type="video/mp4"
-        )
-
-    except HTTPException:
-        raise
+        return FileResponse(filename,filename="clip.mp4")
 
     except Exception as e:
         if os.path.exists(filename):
             os.remove(filename)
-        print("ERROR:", e)
-        raise HTTPException(500, str(e))
+        raise HTTPException(500,str(e))
