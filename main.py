@@ -52,38 +52,31 @@ def random_agent():
 # BUILD YTDLP OPTIONS
 # =========================
 
-def build_ydl(cookie_path=None, client="android"):
+def build_ydl(cookie_path=None):
 
     opts = {
         "quiet": True,
         "nocheckcertificate": True,
 
-        # HD FORMAT
         "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best",
 
-        # Anti block
         "extractor_args": {
             "youtube": {
-                "player_client": [client]
+                "player_client": ["web"]
             }
         },
 
         "http_headers": {
             "User-Agent": random_agent(),
-            "Accept-Language": "en-US,en"
         },
 
         "retries": 5,
-        "fragment_retries": 5,
-        "sleep_interval": 1,
-        "max_sleep_interval": 3,
     }
 
     if cookie_path:
         opts["cookiefile"] = cookie_path
 
     return opts
-
 
 # =========================
 # PARSE TIME
@@ -143,9 +136,13 @@ def process_video(job_id, url, start, end, cookie_path=None):
         # ======================
 
         with YoutubeDL(build_ydl(cookie_path, "android")) as ydl:
-            best = ydl.build_format_selector(
-                "bestvideo+bestaudio/best"
-            )(info)
+            selector = ydl.build_format_selector("bestvideo+bestaudio/best")
+            formats = list(selector(info))
+
+            if not formats:
+                raise Exception("No format found")
+
+            best = formats[0]
 
         requested = best.get("requested_formats")
 
