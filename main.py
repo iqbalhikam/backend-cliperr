@@ -1,17 +1,17 @@
 import os
 import uuid
+import json
 import logging
-import subprocess
-from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import FileResponse
-from yt_dlp import YoutubeDL
+from redis_client import redis_client
 
 # =========================
 # LOGGING SETUP
 # =========================
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [APP] %(message)s"
+    format="%(asctime)s [API] %(message)s"
 )
 
 app = FastAPI()
@@ -23,95 +23,43 @@ os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 os.makedirs(COOKIE_DIR, exist_ok=True)
 
 # =========================
-# PENGGANTI REDIS (In-Memory DB)
+# PARSE & VALIDASI WAKTU
 # =========================
-# Menyimpan status job di dalam RAM. 
-jobs_db = {}
-
-# =========================
-# FUNGSI WORKER (Berjalan di Background)
-# =========================
-def process_video(job_id: str, url: str, start: str, end: str, cookie_path: str = None):
-    jobs_db[job_id] = "processing"
-    logging.info(f"START JOB {job_id} | URL: {url} | CLIP: {start} -> {end}")
-
-    try:
-        # 1. DOWNLOAD VIDEO
-        temp_template = f"{DOWNLOAD_DIR}/{job_id}_full.%(ext)s"
-        ydl_opts = {
-            "outtmpl": temp_template,
-            "format": "bestvideo+bestaudio/best",
-            "merge_output_format": "mp4",
-            "noplaylist": True,
-            "quiet": True
-        }
-
-        if cookie_path:
-            ydl_opts["cookiefile"] = cookie_path
-            logging.info("Using cookies")
-
-        with YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            ext = info.get("ext", "mp4")
-
-        full_path = f"{DOWNLOAD_DIR}/{job_id}_full.{ext}"
-
-        if not os.path.exists(full_path):
-            raise Exception("Download gagal, file tidak ditemukan")
-
-        # 2. POTONG VIDEO DENGAN FFMPEG
-        final_path = f"{DOWNLOAD_DIR}/{job_id}.mp4"
-        logging.info("Cutting clip with FFmpeg...")
-
-        process = subprocess.run([
-            "ffmpeg",
-            "-y",
-            "-ss", str(start),
-            "-to", str(end),
-            "-i", full_path,
-            "-c", "copy",
-            "-avoid_negative_ts", "1",
-            final_path
-        ], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
-
-        if process.returncode != 0:
-            error_msg = process.stderr
-            raise Exception(f"FFmpeg Error: {error_msg}")
-
-        if not os.path.exists(final_path):
-            raise Exception("FFmpeg gagal membuat clip")
-
-        # 3. CLEANUP FILE TEMP
-        try: os.remove(full_path)
-        except: pass
-        
-        try:
-            if cookie_path: os.remove(cookie_path)
-        except: pass
-
-        # 4. UPDATE STATUS SUKSES
-        jobs_db[job_id] = "done:mp4"
-        size = os.path.getsize(final_path) / 1024 / 1024
-        logging.info(f"DONE JOB {job_id} | {size:.2f} MB")
-
-    except Exception as e:
-        # UPDATE STATUS ERROR
-        jobs_db[job_id] = f"error:{str(e)}"
-        logging.error(f"FAILED JOB {job_id} | Error: {e}")
-
+def parse_time(t: str) -> float:
+    t = str(t).strip()
+    if t.isdigit(): return float(t)
+    p = [float(x) for x in t.split(":")]
+    if len(p) == 3: return p[0]*3600 + p[1]*60 + p[2]
+    if len(p) == 2: return p[0]*60 + p[1]
+    return float(p[0])
 
 # =========================
-# ENDPOINTS API
+# ENDPOINTS
 # =========================
-
 @app.post("/download")
 async def start_download(
-    background_tasks: BackgroundTasks, # Injeksi BackgroundTasks
     url: str = Form(...),
     start: str = Form(...),
     end: str = Form(...),
     cookie: UploadFile | None = File(default=None)
 ):
+    # 1. Validasi Durasi di awal (Cegah beban server sebelum masuk Redis)
+    try:
+        start_sec = parse_time(start)
+        end_sec = parse_time(end)
+        
+        if end_sec <= start_sec:
+            raise HTTPException(status_code=400, detail="Waktu 'end' harus lebih besar dari 'start'")
+        
+        # Opsional: Batasi maksimal durasi klip (misal 10 menit / 600 detik)
+        if (end_sec - start_sec) > 600:
+            raise HTTPException(status_code=400, detail="Maksimal durasi klip adalah 10 menit")
+            
+    except Exception as e:
+        if isinstance(e, HTTPException): raise e
+        raise HTTPException(status_code=400, detail="Format waktu tidak valid")
+
+    # 2. Persiapan Job
     job_id = str(uuid.uuid4())
     cookie_path = None
 
@@ -120,20 +68,26 @@ async def start_download(
         with open(cookie_path, "wb") as f:
             f.write(await cookie.read())
 
-    # Set status awal
-    jobs_db[job_id] = "pending"
+    job = {
+        "id": job_id,
+        "url": url,
+        "start": start,
+        "end": end,
+        "cookie": cookie_path
+    }
 
-    # Jalankan fungsi process_video di latar belakang tanpa memblokir API
-    background_tasks.add_task(process_video, job_id, url, start, end, cookie_path)
+    # 3. Lempar ke Antrean Redis
+    redis_client.rpush("download_queue", json.dumps(job))
+    logging.info(f"Job {job_id} berhasil masuk antrean Redis")
 
-    return {"job_id": job_id}
+    return {"job_id": job_id, "status": "queued"}
 
 
 @app.get("/status/{job_id}")
 def status(job_id: str):
-    res = jobs_db.get(job_id)
+    res = redis_client.get(f"job:{job_id}")
 
-    if not res or res in ["pending", "processing"]:
+    if not res:
         return {"status": "processing"}
 
     if res.startswith("done"):
@@ -142,11 +96,18 @@ def status(job_id: str):
             "status": "finished",
             "download": f"/file/{job_id}.{ext}"
         }
+        
+    if res.startswith("error"):
+        return {"status": "error", "msg": res.replace("error:", "", 1)}
 
-    return {"status": "error", "msg": res}
+    return {"status": "error", "msg": "Unknown error"}
 
 
 @app.get("/file/{name}")
 def get_file(name: str):
     path = f"{DOWNLOAD_DIR}/{name}"
+    
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="File video tidak ditemukan atau sudah dihapus")
+        
     return FileResponse(path)
