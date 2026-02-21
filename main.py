@@ -53,17 +53,16 @@ def parse_time(t: str) -> float:
 # HELPER FUNCTIONS
 # =========================
 async def remove_file(path: str, delay: int = 300):
-    """Menghapus file setelah jeda waktu tertentu (default 5 menit)."""
+    """Menghapus file setelah jeda waktu tertentu (default 5 menit) untuk memberi waktu preview & download."""
     try:
-        logging.info(f"Auto-cleanup: Waiting {delay}s before checking {path}")
+        logging.info(f"Auto-cleanup scheduled: Waiting {delay}s for {path}")
         await asyncio.sleep(delay)
         
-        logging.info(f"Auto-cleanup: Checking if file exists: {path}")
         if os.path.exists(path):
             os.remove(path)
-            logging.info(f"Auto-cleanup: SUCCESS. Deleted {path}")
+            logging.info(f"Auto-cleanup SUCCESS: Deleted {path}")
         else:
-            logging.warning(f"Auto-cleanup: File not found for deletion: {path}")
+            logging.warning(f"Auto-cleanup SKIP: File {path} already removed or not found.")
     except Exception as e:
         logging.error(f"Auto-cleanup FAILED: {path} | Error: {e}")
 
@@ -235,17 +234,32 @@ def status(job_id: str):
 
 
 @app.get("/file/{name}")
-def get_file(name: str, background_tasks: BackgroundTasks):
-    """Mengirim file video dan menjadwalkan penghapusan file di folder /tmp/downloads."""
+def get_file(name: str, background_tasks: BackgroundTasks, download: int = 0):
+    """
+    Mengirim file video. 
+    Jika download=1, paksa browser untuk mendownload (Content-Disposition: attachment).
+    Jadwalkan penghapusan file di folder /tmp/downloads setelah 5 menit.
+    """
     path = f"{DOWNLOAD_DIR}/{name}"
     
     if not os.path.exists(path):
-        logging.warning(f"Download request failed: File {name} not found.")
+        logging.warning(f"File access failed: {name} not found.")
         raise HTTPException(status_code=404, detail="File video tidak ditemukan atau sudah dihapus")
         
-    logging.info(f"Serving file: {name}. Deletion scheduled in background.")
+    logging.info(f"Accessing file: {name} (download mode: {download})")
     
     # Menjadwalkan penghapusan file SETELAH file selesai dikirim oleh FastAPI
+    # Kita pakai jeda 5 menit agar preview & download manual aman
     background_tasks.add_task(remove_file, path)
     
+    if download == 1:
+        # Gunakan FileResponse dengan filename & attachment type untuk paksa download
+        return FileResponse(
+            path, 
+            media_type="video/mp4", 
+            filename=name, 
+            content_disposition_type="attachment"
+        )
+    
+    # Mode default (preview) akan mengirim sebagai inline
     return FileResponse(path)
