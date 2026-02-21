@@ -2,6 +2,7 @@
 import os
 import uuid
 import logging
+import asyncio
 import subprocess
 from fastapi import FastAPI, BackgroundTasks, Form, File, UploadFile, HTTPException
 from fastapi.responses import FileResponse
@@ -51,9 +52,12 @@ def parse_time(t: str) -> float:
 # =========================
 # HELPER FUNCTIONS
 # =========================
-def remove_file(path: str):
-    """Fungsi pembantu untuk menghapus file dengan logging eksplisit."""
+async def remove_file(path: str, delay: int = 300):
+    """Menghapus file setelah jeda waktu tertentu (default 5 menit)."""
     try:
+        logging.info(f"Auto-cleanup: Waiting {delay}s before checking {path}")
+        await asyncio.sleep(delay)
+        
         logging.info(f"Auto-cleanup: Checking if file exists: {path}")
         if os.path.exists(path):
             os.remove(path)
