@@ -1,5 +1,6 @@
 fastapi
 uvicorn
-pydantic
 yt-dlp
+redis
+python-multipart
 curl-cffi

@@ -1,180 +1,73 @@
-from fastapi import FastAPI, HTTPException, BackgroundTasks
-from fastapi.responses import FileResponse
-from pydantic import BaseModel, HttpUrl
-import yt_dlp
-import subprocess
-import uuid
 import os
-import time
-import logging
-
-# ======================
-# LOGGING SETUP
-# ======================
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s"
-)
+import uuid
+import json
+from fastapi import FastAPI, UploadFile, File, Form
+from fastapi.responses import FileResponse
+from redis_client import redis_client
 
 app = FastAPI()
 
-# ======================
-# MODEL
-# ======================
-class ClipRequest(BaseModel):
-    url: HttpUrl
-    start: str
-    end: str
+DOWNLOAD_DIR="/tmp/downloads"
+COOKIE_DIR="/tmp/cookies"
 
-# ======================
-# TIME PARSER
-# ======================
-def parse_time(t:str)->float:
-    t=str(t).strip()
+os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+os.makedirs(COOKIE_DIR, exist_ok=True)
 
-    if t.isdigit():
-        return float(t)
 
-    p=[float(x) for x in t.split(":")]
+@app.post("/download")
 
-    if len(p)==3:
-        return p[0]*3600+p[1]*60+p[2]
-    if len(p)==2:
-        return p[0]*60+p[1]
+async def start_download(
+    url: str = Form(...),
+    cookie: UploadFile | None = File(default=None)
+):
 
-    return p[0]
+    job_id=str(uuid.uuid4())
+    cookie_path=None
 
-# ======================
-# CLEANUP
-# ======================
-def cleanup(path):
-    time.sleep(10)
-    try:
-        if os.path.exists(path):
-            os.remove(path)
-            logging.info(f"Deleted temp file {path}")
-    except Exception as e:
-        logging.error(f"Cleanup error {e}")
+    if cookie:
 
-# ======================
-# GET BEST STREAM (REAL PRO)
-# ======================
-def get_best_stream(url):
+        cookie_path=f"{COOKIE_DIR}/{job_id}.txt"
 
-    logging.info("Extracting formats from YouTube...")
+        with open(cookie_path,"wb") as f:
+            f.write(await cookie.read())
 
-    with yt_dlp.YoutubeDL({"quiet":True}) as ydl:
-        info=ydl.extract_info(url,download=False)
+    job={
 
-    formats=info["formats"]
+        "id":job_id,
+        "url":url,
+        "cookie":cookie_path
+    }
 
-    # VIDEO ONLY
-    videos=[
-        f for f in formats
-        if f.get("vcodec")!="none" and f.get("acodec")=="none"
-    ]
+    redis_client.rpush("download_queue", json.dumps(job))
 
-    # SORT BEST RESOLUTION + BITRATE
-    videos=sorted(
-        videos,
-        key=lambda x:(x.get("height",0),x.get("tbr",0)),
-        reverse=True
-    )
+    return {"job_id":job_id}
 
-    best_video=videos[0]
 
-    # AUDIO ONLY
-    audios=[
-        f for f in formats
-        if f.get("acodec")!="none" and f.get("vcodec")=="none"
-    ]
+@app.get("/status/{job_id}")
 
-    audios=sorted(
-        audios,
-        key=lambda x:x.get("tbr",0),
-        reverse=True
-    )
+def status(job_id:str):
 
-    best_audio=audios[0]
+    res=redis_client.get(f"job:{job_id}")
 
-    logging.info(
-        f"BEST VIDEO → {best_video.get('height')}p  bitrate={best_video.get('tbr')}"
-    )
+    if not res:
+        return {"status":"processing"}
 
-    logging.info(
-        f"BEST AUDIO → bitrate={best_audio.get('tbr')}"
-    )
+    if res.startswith("done"):
 
-    return best_video["url"],best_audio["url"]
+        ext=res.split(":")[1]
 
-# ======================
-# MAIN API
-# ======================
-@app.post("/clip")
-def clip(req:ClipRequest, bg:BackgroundTasks):
+        return {
 
-    start=parse_time(req.start)
-    end=parse_time(req.end)
+            "status":"finished",
+            "download":f"/file/{job_id}.{ext}"
+        }
 
-    if end<=start:
-        raise HTTPException(400,"End harus lebih besar")
+    return {"status":"error","msg":res}
 
-    duration=end-start
 
-    if duration>180:
-        raise HTTPException(400,"Max clip 180 detik")
+@app.get("/file/{name}")
 
-    filename=f"clip_{uuid.uuid4().hex}.mp4"
+def get_file(name:str):
 
-    try:
-
-        logging.info("====================================")
-        logging.info(f"CLIP REQUEST")
-        logging.info(f"URL: {req.url}")
-        logging.info(f"START: {start}")
-        logging.info(f"END: {end}")
-        logging.info("====================================")
-
-        video_url,audio_url=get_best_stream(str(req.url))
-
-        cmd=[
-            "ffmpeg",
-            "-ss",str(start),
-            "-to",str(end),
-            "-i",video_url,
-            "-ss",str(start),
-            "-to",str(end),
-            "-i",audio_url,
-            "-map","0:v",
-            "-map","1:a",
-            "-c","copy",
-            "-avoid_negative_ts","1",
-            filename
-        ]
-
-        logging.info("Running FFmpeg...")
-        logging.info(" ".join(cmd))
-
-        subprocess.run(cmd)
-
-        if not os.path.exists(filename):
-            raise HTTPException(500,"FFmpeg gagal membuat file")
-
-        size=os.path.getsize(filename)/1024/1024
-        logging.info(f"Clip created → {size:.2f} MB")
-
-        bg.add_task(cleanup,filename)
-
-        return FileResponse(
-            filename,
-            filename="clip.mp4",
-            media_type="video/mp4"
-        )
-
-    except Exception as e:
-        logging.error(f"ERROR: {e}")
-
-        if os.path.exists(filename):
-            os.remove(filename)
-
-        raise HTTPException(500,str(e))
+    path=f"{DOWNLOAD_DIR}/{name}"
+    return FileResponse(path)
