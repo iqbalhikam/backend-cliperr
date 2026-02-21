@@ -135,7 +135,7 @@ def process_video(job_id, url, start, end, cookie_path=None):
         # STEP 2: Select BEST format
         # ======================
 
-        with YoutubeDL(build_ydl(cookie_path, "android")) as ydl:
+        with YoutubeDL(build_ydl(cookie_path)) as ydl:
             selector = ydl.build_format_selector("bestvideo+bestaudio/best")
             formats = list(selector(info))
 
