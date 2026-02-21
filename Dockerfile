@@ -15,4 +15,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # railway inject PORT otomatis
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "7860"]
+CMD ["python", "worker.py", "&&", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "7860"]
