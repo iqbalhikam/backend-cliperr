@@ -15,9 +15,10 @@ os.makedirs(COOKIE_DIR, exist_ok=True)
 
 
 @app.post("/download")
-
 async def start_download(
     url: str = Form(...),
+    start: str = Form(...),   # TAMBAHAN
+    end: str = Form(...),     # TAMBAHAN
     cookie: UploadFile | None = File(default=None)
 ):
 
@@ -25,16 +26,15 @@ async def start_download(
     cookie_path=None
 
     if cookie:
-
         cookie_path=f"{COOKIE_DIR}/{job_id}.txt"
-
         with open(cookie_path,"wb") as f:
             f.write(await cookie.read())
 
     job={
-
         "id":job_id,
         "url":url,
+        "start":start,   # TAMBAHAN
+        "end":end,       # TAMBAHAN
         "cookie":cookie_path
     }
 
