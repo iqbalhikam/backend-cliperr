@@ -49,10 +49,25 @@ def parse_time(t: str) -> float:
     return float(p[0])
 
 # =========================
+# HELPER FUNCTIONS
+# =========================
+def remove_file(path: str):
+    """Fungsi pembantu untuk menghapus file dengan logging eksplisit."""
+    try:
+        logging.info(f"Auto-cleanup: Checking if file exists: {path}")
+        if os.path.exists(path):
+            os.remove(path)
+            logging.info(f"Auto-cleanup: SUCCESS. Deleted {path}")
+        else:
+            logging.warning(f"Auto-cleanup: File not found for deletion: {path}")
+    except Exception as e:
+        logging.error(f"Auto-cleanup FAILED: {path} | Error: {e}")
+
+# =========================
 # FUNGSI WORKER (Berjalan di Background)
 # =========================
 def process_video_on_the_fly(job_id: str, url: str, start: str, end: str, cookie_path: str = None):
-    jobs_db[job_id] = "processing"
+    jobs_db[job_id] = {"status": "processing", "message": "Memulai proses...", "step": 1}
     logging.info(f"START JOB {job_id} | URL: {url} | CLIP: {start} -> {end}")
 
     final_path = f"{DOWNLOAD_DIR}/{job_id}.mp4"
@@ -65,6 +80,8 @@ def process_video_on_the_fly(job_id: str, url: str, start: str, end: str, cookie
 
         # 1. AMBIL DIRECT URL STREAM (TANPA DOWNLOAD)
         logging.info("Extracting stream URLs...")
+        jobs_db[job_id]["message"] = "Mencari video..."
+        jobs_db[job_id]["step"] = 2
         with YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
 
@@ -83,6 +100,8 @@ def process_video_on_the_fly(job_id: str, url: str, start: str, end: str, cookie
             best_audio_url = audios[0]["url"]
 
             logging.info("Format terpisah dideteksi. Menjalankan FFmpeg...")
+            jobs_db[job_id]["message"] = "Sedang proses clipping..."
+            jobs_db[job_id]["step"] = 3
             cmd = [
                 "ffmpeg", "-y",
                 "-ss", start, "-to", end, "-i", best_video_url,
@@ -102,6 +121,8 @@ def process_video_on_the_fly(job_id: str, url: str, start: str, end: str, cookie
                 stream_url = info.get("url")
                 
             logging.info("Format gabungan dideteksi. Menjalankan FFmpeg...")
+            jobs_db[job_id]["message"] = "Sedang proses clipping..."
+            jobs_db[job_id]["step"] = 3
             cmd = [
                 "ffmpeg", "-y",
                 "-ss", start, "-to", end, "-i", stream_url,
@@ -171,7 +192,7 @@ async def start_download(
             f.write(await cookie.read())
 
     # Set status awal di memory
-    jobs_db[job_id] = "processing"
+    jobs_db[job_id] = {"status": "processing", "message": "Menunggu antrian...", "step": 1}
 
     # Lempar ke background task
     background_tasks.add_task(
@@ -190,8 +211,11 @@ async def start_download(
 def status(job_id: str):
     res = jobs_db.get(job_id)
 
-    if not res or res in ["pending", "processing"]:
-        return {"status": "processing"}
+    if not res:
+        return {"status": "error", "msg": "Job tidak ditemukan"}
+
+    if isinstance(res, dict):
+        return res
 
     if res.startswith("done"):
         ext = res.split(":")[1]
@@ -207,10 +231,17 @@ def status(job_id: str):
 
 
 @app.get("/file/{name}")
-def get_file(name: str):
+def get_file(name: str, background_tasks: BackgroundTasks):
+    """Mengirim file video dan menjadwalkan penghapusan file di folder /tmp/downloads."""
     path = f"{DOWNLOAD_DIR}/{name}"
     
     if not os.path.exists(path):
+        logging.warning(f"Download request failed: File {name} not found.")
         raise HTTPException(status_code=404, detail="File video tidak ditemukan atau sudah dihapus")
         
+    logging.info(f"Serving file: {name}. Deletion scheduled in background.")
+    
+    # Menjadwalkan penghapusan file SETELAH file selesai dikirim oleh FastAPI
+    background_tasks.add_task(remove_file, path)
+    
     return FileResponse(path)
