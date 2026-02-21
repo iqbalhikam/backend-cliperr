@@ -1,6 +1,6 @@
 fastapi
-uvicorn
+uvicorn[standard]
 yt-dlp
-redis
 python-multipart
-curl-cffi
+redis
+requests
