@@ -117,7 +117,7 @@ def process_video(job_id, url, start, end, cookie_path=None):
         info = None
 
         try:
-            with YoutubeDL(build_ydl(cookie_path, "android")) as ydl:
+            with YoutubeDL(build_ydl(cookie_path)) as ydl:
                 info = ydl.extract_info(url, download=False)
         except:
             pass
@@ -125,7 +125,7 @@ def process_video(job_id, url, start, end, cookie_path=None):
         # fallback to web if needed
         if not info:
             logging.info("Fallback to web client...")
-            with YoutubeDL(build_ydl(cookie_path, "web")) as ydl:
+            with YoutubeDL(build_ydl(cookie_path)) as ydl:
                 info = ydl.extract_info(url, download=False)
 
         if not info:
