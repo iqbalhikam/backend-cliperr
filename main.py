@@ -5,6 +5,7 @@ import logging
 import subprocess
 from fastapi import FastAPI, BackgroundTasks, Form, File, UploadFile, HTTPException
 from fastapi.responses import FileResponse
+from fastapi.middleware.cors import CORSMiddleware
 from yt_dlp import YoutubeDL
 
 # =========================
@@ -16,6 +17,17 @@ logging.basicConfig(
 )
 
 app = FastAPI()
+
+# =========================
+# CORS CONFIGURATION
+# =========================
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Mengizinkan request dari semua domain (localhost, Vercel, dll)
+    allow_credentials=True,
+    allow_methods=["*"],  # Mengizinkan semua method (GET, POST, OPTIONS, dll)
+    allow_headers=["*"],  # Mengizinkan semua header
+)
 
 DOWNLOAD_DIR = "/tmp/downloads"
 COOKIE_DIR = "/tmp/cookies"
