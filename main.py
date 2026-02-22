@@ -105,15 +105,35 @@ def process_video_on_the_fly(job_id: str, url: str, start: str, end: str, cookie
             logging.info("Format terpisah dideteksi. Menjalankan FFmpeg...")
             jobs_db[job_id]["message"] = "Sedang proses clipping..."
             jobs_db[job_id]["step"] = 3
-            cmd = [
-                "ffmpeg", "-y",
-                "-ss", start, "-to", end, "-i", best_video_url,
-                "-ss", start, "-to", end, "-i", best_audio_url,
-                "-map", "0:v", "-map", "1:a",
-                "-c", "copy",
-                "-avoid_negative_ts", "1",
-                final_path
-            ]
+
+            is_live = info.get('is_live', False) or info.get('live_status') == 'is_live'
+
+            if is_live:
+                logging.info("Livestream dideteksi, menggunakan mode HLS stabil...")
+
+                cmd = [
+                    "ffmpeg", "-y",
+                    "-protocol_whitelist", "file,http,https,tcp,tls",
+                    "-fflags", "+genpts",
+                    "-copyts",
+                    *input_opts,
+                    "-ss", start,
+                    "-i", stream_url,
+                    "-t", duration,
+                    "-c", "copy",
+                    "-avoid_negative_ts", "1",
+                    final_path
+                ]         
+            else:
+                cmd = [
+                    "ffmpeg", "-y",
+                    "-ss", start, "-to", end, "-i", best_video_url,
+                    "-ss", start, "-to", end, "-i", best_audio_url,
+                    "-map", "0:v", "-map", "1:a",
+                    "-c", "copy",
+                    "-avoid_negative_ts", "1",
+                    final_path
+                ]
         else:
             # Skenario Stream Gabungan (Livestream Umum/TikTok/File MP4 biasa)
             best_combined = [f for f in formats if f.get("vcodec") != "none" and f.get("acodec") != "none"]
