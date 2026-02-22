@@ -107,8 +107,8 @@ def process_video_on_the_fly(job_id: str, url: str, start: str, end: str, cookie
             jobs_db[job_id]["step"] = 3
             cmd = [
                 "ffmpeg", "-y",
-                "-ss", start, "-t", end, "-i", best_video_url,
-                "-ss", start, "-t", end, "-i", best_audio_url,
+                "-ss", start, "-to", end, "-i", best_video_url,
+                "-ss", start, "-to", end, "-i", best_audio_url,
                 "-map", "0:v", "-map", "1:a",
                 "-c", "copy",
                 "-avoid_negative_ts", "1",
