@@ -105,15 +105,34 @@ def process_video_on_the_fly(job_id: str, url: str, start: str, end: str, cookie
             logging.info("Format terpisah dideteksi. Menjalankan FFmpeg...")
             jobs_db[job_id]["message"] = "Sedang proses clipping..."
             jobs_db[job_id]["step"] = 3
-            cmd = [
-                "ffmpeg", "-y",
-                "-ss", start, "-to", end, "-i", best_video_url,
-                "-ss", start, "-to", end, "-i", best_audio_url,
-                "-map", "0:v", "-map", "1:a",
-                "-c", "copy",
-                "-avoid_negative_ts", "1",
-                final_path
-            ]
+            
+            # Deteksi apakah ini livestream
+            is_live = info.get('is_live', False) or info.get('live_status') == 'is_live'
+            
+            # Reconnect flags untuk handle link stream yang tidak stabil
+            input_opts = ["-reconnect", "1", "-reconnect_at_eof", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "2"]
+            
+            if is_live:
+                logging.info("Livestream dideteksi, menambahkan flag reconnect...")
+                cmd = [
+                    "ffmpeg", "-y",
+                    *input_opts, "-ss", start, "-to", end, "-i", best_video_url,
+                    *input_opts, "-ss", start, "-to", end, "-i", best_audio_url,
+                    "-map", "0:v", "-map", "1:a",
+                    "-c", "copy",
+                    "-avoid_negative_ts", "1",
+                    final_path
+                ]
+            else:
+                cmd = [
+                    "ffmpeg", "-y",
+                    "-ss", start, "-to", end, "-i", best_video_url,
+                    "-ss", start, "-to", end, "-i", best_audio_url,
+                    "-map", "0:v", "-map", "1:a",
+                    "-c", "copy",
+                    "-avoid_negative_ts", "1",
+                    final_path
+                ]
         else:
             # Skenario Stream Gabungan (Livestream Umum/TikTok/File MP4 biasa)
             best_combined = [f for f in formats if f.get("vcodec") != "none" and f.get("acodec") != "none"]
@@ -126,13 +145,31 @@ def process_video_on_the_fly(job_id: str, url: str, start: str, end: str, cookie
             logging.info("Format gabungan dideteksi. Menjalankan FFmpeg...")
             jobs_db[job_id]["message"] = "Sedang proses clipping..."
             jobs_db[job_id]["step"] = 3
-            cmd = [
-                "ffmpeg", "-y",
-                "-ss", start, "-to", end, "-i", stream_url,
-                "-c", "copy",
-                "-avoid_negative_ts", "1",
-                final_path
-            ]
+            
+            # Deteksi apakah ini livestream
+            is_live = info.get('is_live', False) or info.get('live_status') == 'is_live'
+            
+            # Reconnect flags untuk handle link stream yang tidak stabil
+            input_opts = ["-reconnect", "1", "-reconnect_at_eof", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "2"]
+            
+            if is_live:
+                logging.info("Livestream dideteksi, menambahkan flag reconnect...")
+                cmd = [
+                    "ffmpeg", "-y",
+                    *input_opts,
+                    "-ss", start, "-to", end, "-i", stream_url,
+                    "-c", "copy",
+                    "-avoid_negative_ts", "1",
+                    final_path
+                ]
+            else:
+                cmd = [
+                    "ffmpeg", "-y",
+                    "-ss", start, "-to", end, "-i", stream_url,
+                    "-c", "copy",
+                    "-avoid_negative_ts", "1",
+                    final_path
+                ]
 
         # 3. EKSEKUSI PEMOTONGAN LANGSUNG DARI URL
         process = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
