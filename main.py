@@ -27,8 +27,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-DOWNLOAD_DIR = "/tmp/downloads"
-COOKIE_DIR = "/tmp/cookies"
+import tempfile
+
+# =========================
+# DIRECTORY SETUP
+# =========================
+BASE_TEMP = tempfile.gettempdir()
+DOWNLOAD_DIR = os.path.join(BASE_TEMP, "caw_downloads")
+COOKIE_DIR = os.path.join(BASE_TEMP, "caw_cookies")
 
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 os.makedirs(COOKIE_DIR, exist_ok=True)
@@ -238,7 +244,6 @@ def get_file(name: str, background_tasks: BackgroundTasks, download: int = 0):
     """
     Mengirim file video. 
     Jika download=1, paksa browser untuk mendownload (Content-Disposition: attachment).
-    Jika download=0 (default), kirim sebagai video untuk preview (inline).
     Jadwalkan penghapusan file di folder /tmp/downloads setelah 5 menit.
     """
     path = f"{DOWNLOAD_DIR}/{name}"
@@ -250,6 +255,7 @@ def get_file(name: str, background_tasks: BackgroundTasks, download: int = 0):
     logging.info(f"Accessing file: {name} (download mode: {download})")
     
     # Menjadwalkan penghapusan file SETELAH file selesai dikirim oleh FastAPI
+    # Kita pakai jeda 5 menit agar preview & download manual aman
     background_tasks.add_task(remove_file, path)
     
     if download == 1:
@@ -261,6 +267,5 @@ def get_file(name: str, background_tasks: BackgroundTasks, download: int = 0):
             content_disposition_type="attachment"
         )
     
-    # Mode default (preview) akan mengirim sebagai inline dengan media_type eksplisit
-    # Media type ini krusial agar browser bisa memutar video dan mendukung seeking/range
-    return FileResponse(path, media_type="video/mp4")
+    # Mode default (preview) akan mengirim sebagai inline
+    return FileResponse(path)
