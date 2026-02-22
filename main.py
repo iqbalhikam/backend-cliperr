@@ -157,7 +157,7 @@ def process_video_on_the_fly(job_id: str, url: str, start: str, end: str, cookie
                 cmd = [
                     "ffmpeg", "-y",
                     *input_opts,
-                    "-ss", start, "-to", end, "-i", stream_url,
+                    "-ss", start, "-t", end, "-i", stream_url,
                     "-c", "copy",
                     "-avoid_negative_ts", "1",
                     final_path
