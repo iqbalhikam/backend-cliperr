@@ -27,14 +27,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-import tempfile
-
-# =========================
-# DIRECTORY SETUP
-# =========================
-BASE_TEMP = tempfile.gettempdir()
-DOWNLOAD_DIR = os.path.join(BASE_TEMP, "caw_downloads")
-COOKIE_DIR = os.path.join(BASE_TEMP, "caw_cookies")
+DOWNLOAD_DIR = "/tmp/downloads"
+COOKIE_DIR = "/tmp/cookies"
 
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 os.makedirs(COOKIE_DIR, exist_ok=True)
