@@ -49,11 +49,13 @@ def get_best_stream(url, cookie_path=None):
     logging.info(f"[STREAM] Extracting info from URL: {url}")
 
     ydl_opts = {
-        "quiet": True,
-        "js_runtimes": ["node"],
+            "quiet": True,
+        "js_runtimes": {
+            "node": {}
+        },
         "extractor_args": {
             "youtube": {
-                "player_client": ["web"]
+                "player_client": ["android", "web"]
             }
         }
     }
