@@ -85,7 +85,7 @@ def process_media(job_id, url, start, end, mode, interval, cookie_path):
                 "-frames:v", "1",
                 "-q:v", "1",
                 "-compression_level", "0",
-                "-vf", "scale=iw*2:ih*2:flags=lanczos",
+                "-vf", "scale=iw:ih:flags=lanczos",
                 final_path
             ]
 
