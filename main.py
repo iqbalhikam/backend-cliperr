@@ -46,7 +46,15 @@ async def remove_file(path: str, delay: int = 300):
         os.remove(path)
 
 def get_best_stream(url, cookie_path=None):
-    ydl_opts = {"quiet": True}
+    ydl_opts = {
+        "quiet": True,
+        "js_runtimes": ["node"],
+        "extractor_args": {
+            "youtube": {
+                "player_client": ["web"]
+            }
+        }
+    }
     if cookie_path:
         ydl_opts["cookiefile"] = cookie_path
 
