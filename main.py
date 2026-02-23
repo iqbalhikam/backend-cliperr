@@ -1,21 +1,15 @@
-
 import os
 import uuid
 import logging
 import asyncio
 import subprocess
+import zipfile
 from fastapi import FastAPI, BackgroundTasks, Form, File, UploadFile, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from yt_dlp import YoutubeDL
 
-# =========================
-# LOGGING SETUP
-# =========================
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [APP] %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [APP] %(message)s")
 
 app = FastAPI()
 
@@ -33,13 +27,10 @@ COOKIE_DIR = "/tmp/cookies"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 os.makedirs(COOKIE_DIR, exist_ok=True)
 
-# =========================
-# PENGGANTI REDIS (In-Memory DB)
-# =========================
 jobs_db = {}
 
 # =========================
-# PARSE & VALIDASI WAKTU
+# UTIL
 # =========================
 def parse_time(t: str) -> float:
     t = str(t).strip()
@@ -49,143 +40,140 @@ def parse_time(t: str) -> float:
     if len(p) == 2: return p[0]*60 + p[1]
     return float(p[0])
 
-# =========================
-# HELPER FUNCTIONS
-# =========================
 async def remove_file(path: str, delay: int = 300):
-    """Menghapus file setelah jeda waktu tertentu (default 5 menit) untuk memberi waktu preview & download."""
-    try:
-        logging.info(f"Auto-cleanup scheduled: Waiting {delay}s for {path}")
-        await asyncio.sleep(delay)
-        
-        if os.path.exists(path):
-            os.remove(path)
-            logging.info(f"Auto-cleanup SUCCESS: Deleted {path}")
-        else:
-            logging.warning(f"Auto-cleanup SKIP: File {path} already removed or not found.")
-    except Exception as e:
-        logging.error(f"Auto-cleanup FAILED: {path} | Error: {e}")
+    await asyncio.sleep(delay)
+    if os.path.exists(path):
+        os.remove(path)
+
+def get_best_stream(url, cookie_path=None):
+    ydl_opts = {"quiet": True}
+    if cookie_path:
+        ydl_opts["cookiefile"] = cookie_path
+
+    with YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+
+    formats = info.get("formats", [])
+    videos = [f for f in formats if f.get("vcodec") != "none"]
+    videos = sorted(videos, key=lambda x: x.get("height", 0), reverse=True)
+
+    if videos:
+        return videos[0]["url"]
+
+    return info.get("url")
 
 # =========================
-# FUNGSI WORKER (Berjalan di Background)
+# WORKER
 # =========================
-def process_video_on_the_fly(job_id: str, url: str, start: str, end: str, cookie_path: str = None):
-    jobs_db[job_id] = {"status": "processing", "message": "Memulai proses...", "step": 1}
-    logging.info(f"START JOB {job_id} | URL: {url} | CLIP: {start} -> {end}")
-
-    final_path = f"{DOWNLOAD_DIR}/{job_id}.mp4"
+def process_media(job_id, url, start, end, mode, interval, cookie_path):
 
     try:
-        ydl_opts = {"quiet": True}
-        if cookie_path:
-            ydl_opts["cookiefile"] = cookie_path
-            logging.info("Using cookies")
+        jobs_db[job_id] = {"status": "processing", "message": "Processing...", "step": 1}
 
-        # 1. AMBIL DIRECT URL STREAM (TANPA DOWNLOAD)
-        logging.info("Extracting stream URLs...")
-        jobs_db[job_id]["message"] = "Mencari video..."
-        jobs_db[job_id]["step"] = 2
-        with YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
+        stream_url = get_best_stream(url, cookie_path)
 
-        formats = info.get("formats", [])
-        
-        # 2. DETEKSI FORMAT & SUSUN PERINTAH FFMPEG
-        videos = [f for f in formats if f.get("vcodec") != "none" and f.get("acodec") == "none"]
-        audios = [f for f in formats if f.get("acodec") != "none" and f.get("vcodec") == "none"]
+        # =========================
+        # SUPER HD (PNG LOSSLESS)
+        # =========================
+        if mode == "super_photo":
+            final_path = f"{DOWNLOAD_DIR}/{job_id}.png"
 
-        if videos and audios:
-            # Skenario Stream Terpisah (Khas YouTube)
-            videos = sorted(videos, key=lambda x: (x.get("height", 0), x.get("tbr", 0)), reverse=True)
-            audios = sorted(audios, key=lambda x: x.get("tbr", 0), reverse=True)
-            
-            best_video_url = videos[0]["url"]
-            best_audio_url = audios[0]["url"]
-
-            logging.info("Format terpisah dideteksi. Menjalankan FFmpeg...")
-            jobs_db[job_id]["message"] = "Sedang proses clipping..."
-            jobs_db[job_id]["step"] = 3
             cmd = [
                 "ffmpeg", "-y",
-                "-ss", start, "-to", end, "-i", best_video_url,
-                "-ss", start, "-to", end, "-i", best_audio_url,
-                "-map", "0:v", "-map", "1:a",
-                "-c", "copy",
-                "-avoid_negative_ts", "1",
-                final_path
-            ]
-        else:
-            # Skenario Stream Gabungan (Livestream Umum/TikTok/File MP4 biasa)
-            best_combined = [f for f in formats if f.get("vcodec") != "none" and f.get("acodec") != "none"]
-            if best_combined:
-                best_combined = sorted(best_combined, key=lambda x: (x.get("height", 0), x.get("tbr", 0)), reverse=True)
-                stream_url = best_combined[0]["url"]
-            else:
-                stream_url = info.get("url")
-                
-            logging.info("Format gabungan dideteksi. Menjalankan FFmpeg...")
-            jobs_db[job_id]["message"] = "Sedang proses clipping..."
-            jobs_db[job_id]["step"] = 3
-            cmd = [
-                "ffmpeg", "-y",
-                "-ss", start, "-to", end, "-i", stream_url,
-                "-c", "copy",
-                "-avoid_negative_ts", "1",
+                "-ss", start,
+                "-i", stream_url,
+                "-frames:v", "1",
+                "-vsync", "vfr",
+                "-pix_fmt", "rgb24",
                 final_path
             ]
 
-        # 3. EKSEKUSI PEMOTONGAN LANGSUNG DARI URL
-        process = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+        # =========================
+        # BURST MODE
+        # =========================
+        elif mode == "burst":
+            if not end:
+                raise Exception("Burst butuh waktu end")
 
-        if process.returncode != 0:
-            raise Exception(f"FFmpeg Error: {process.stderr}")
+            burst_folder = f"{DOWNLOAD_DIR}/{job_id}_frames"
+            os.makedirs(burst_folder, exist_ok=True)
 
-        if not os.path.exists(final_path):
-            raise Exception("FFmpeg gagal membuat clip (File tidak ditemukan)")
+            cmd = [
+                "ffmpeg", "-y",
+                "-ss", start,
+                "-to", end,
+                "-i", stream_url,
+                "-vf", f"fps=1/{interval}",
+                f"{burst_folder}/frame_%03d.png"
+            ]
 
-        # 4. CLEANUP COOKIE & UPDATE STATUS SUKSES
-        try:
-            if cookie_path: os.remove(cookie_path)
-        except: pass
+            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
 
-        jobs_db[job_id] = "done:mp4"
-        size = os.path.getsize(final_path) / 1024 / 1024
-        logging.info(f"DONE JOB {job_id} | {size:.2f} MB")
+            zip_path = f"{DOWNLOAD_DIR}/{job_id}.zip"
+            with zipfile.ZipFile(zip_path, "w") as z:
+                for file in sorted(os.listdir(burst_folder)):
+                    z.write(os.path.join(burst_folder, file), file)
+
+            final_path = zip_path
+
+        # =========================
+        # PHOTO BIASA (JPG)
+        # =========================
+        elif mode == "photo":
+            final_path = f"{DOWNLOAD_DIR}/{job_id}.jpg"
+
+            cmd = [
+                "ffmpeg", "-y",
+                "-ss", start,
+                "-i", stream_url,
+                "-frames:v", "1",
+                "-q:v", "1",
+                final_path
+            ]
+
+        # =========================
+        # VIDEO CLIP
+        # =========================
+        else:
+            final_path = f"{DOWNLOAD_DIR}/{job_id}.mp4"
+
+            cmd = [
+                "ffmpeg", "-y",
+                "-ss", start,
+                "-to", end,
+                "-i", stream_url,
+                "-c", "copy",
+                final_path
+            ]
+
+        if mode != "burst":
+            process = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            if process.returncode != 0:
+                raise Exception("FFmpeg error")
+
+        ext = final_path.split(".")[-1]
+        jobs_db[job_id] = f"done:{ext}"
 
     except Exception as e:
-        # UPDATE STATUS ERROR
         jobs_db[job_id] = f"error:{str(e)}"
-        logging.error(f"FAILED JOB {job_id} | Error: {e}")
 
+    finally:
+        if cookie_path and os.path.exists(cookie_path):
+            os.remove(cookie_path)
 
 # =========================
-# ENDPOINTS API
+# API
 # =========================
-
 @app.post("/download")
 async def start_download(
     background_tasks: BackgroundTasks,
     url: str = Form(...),
     start: str = Form(...),
-    end: str = Form(...),
+    end: str | None = Form(None),
+    mode: str = Form("video"),
+    interval: int = Form(2),
     cookie: UploadFile | None = File(default=None)
 ):
-    # Validasi input waktu
-    try:
-        start_sec = parse_time(start)
-        end_sec = parse_time(end)
-        
-        if end_sec <= start_sec:
-            raise HTTPException(status_code=400, detail="Waktu 'end' harus lebih besar dari 'start'")
-        
-        # Batasi durasi klip (contoh: maksimal 10 menit / 600 detik)
-        if (end_sec - start_sec) > 600:
-            raise HTTPException(status_code=400, detail="Maksimal durasi klip adalah 10 menit")
-            
-    except Exception as e:
-        if isinstance(e, HTTPException): raise e
-        raise HTTPException(status_code=400, detail="Format waktu tidak valid")
-
     job_id = str(uuid.uuid4())
     cookie_path = None
 
@@ -194,28 +182,26 @@ async def start_download(
         with open(cookie_path, "wb") as f:
             f.write(await cookie.read())
 
-    # Set status awal di memory
-    jobs_db[job_id] = {"status": "processing", "message": "Menunggu antrian...", "step": 1}
+    jobs_db[job_id] = {"status": "processing"}
 
-    # Lempar ke background task
     background_tasks.add_task(
-        process_video_on_the_fly, 
-        job_id, 
-        url, 
-        str(start_sec), 
-        str(end_sec), 
+        process_media,
+        job_id,
+        url,
+        start,
+        end,
+        mode,
+        interval,
         cookie_path
     )
 
-    return {"job_id": job_id, "status": "processing"}
-
+    return {"job_id": job_id}
 
 @app.get("/status/{job_id}")
 def status(job_id: str):
     res = jobs_db.get(job_id)
-
     if not res:
-        return {"status": "error", "msg": "Job tidak ditemukan"}
+        return {"status": "error"}
 
     if isinstance(res, dict):
         return res
@@ -226,40 +212,21 @@ def status(job_id: str):
             "status": "finished",
             "download": f"/file/{job_id}.{ext}"
         }
-        
-    if res.startswith("error"):
-        return {"status": "error", "msg": res.replace("error:", "", 1)}
 
-    return {"status": "error", "msg": "Unknown error"}
-
+    return {"status": "error"}
 
 @app.get("/file/{name}")
-def get_file(name: str, background_tasks: BackgroundTasks, download: int = 0):
-    """
-    Mengirim file video. 
-    Jika download=1, paksa browser untuk mendownload (Content-Disposition: attachment).
-    Jadwalkan penghapusan file di folder /tmp/downloads setelah 5 menit.
-    """
+def get_file(name: str, background_tasks: BackgroundTasks):
     path = f"{DOWNLOAD_DIR}/{name}"
-    
     if not os.path.exists(path):
-        logging.warning(f"File access failed: {name} not found.")
-        raise HTTPException(status_code=404, detail="File video tidak ditemukan atau sudah dihapus")
-        
-    logging.info(f"Accessing file: {name} (download mode: {download})")
-    
-    # Menjadwalkan penghapusan file SETELAH file selesai dikirim oleh FastAPI
-    # Kita pakai jeda 5 menit agar preview & download manual aman
+        raise HTTPException(status_code=404)
+
     background_tasks.add_task(remove_file, path)
-    
-    if download == 1:
-        # Gunakan FileResponse dengan filename & attachment type untuk paksa download
-        return FileResponse(
-            path, 
-            media_type="video/mp4", 
-            filename=name, 
-            content_disposition_type="attachment"
-        )
-    
-    # Mode default (preview) akan mengirim sebagai inline
-    return FileResponse(path)
+
+    if name.endswith(".png"):
+        return FileResponse(path, media_type="image/png")
+    if name.endswith(".jpg"):
+        return FileResponse(path, media_type="image/jpeg")
+    if name.endswith(".zip"):
+        return FileResponse(path, media_type="application/zip")
+    return FileResponse(path, media_type="video/mp4")
