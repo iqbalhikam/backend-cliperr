@@ -81,10 +81,11 @@ def process_media(job_id, url, start, end, mode, interval, cookie_path):
             cmd = [
                 "ffmpeg", "-y",
                 "-ss", start,
-                "-i", stream_url,
+                "-i", best_video_url,
                 "-frames:v", "1",
-                "-vsync", "vfr",
-                "-pix_fmt", "rgb24",
+                "-q:v", "1",
+                "-compression_level", "0",
+                "-vf", "scale=iw:ih:flags=lanczos,unsharp=5:5:1.0:5:5:0.0",
                 final_path
             ]
 
