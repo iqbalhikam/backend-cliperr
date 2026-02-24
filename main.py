@@ -48,10 +48,12 @@ async def remove_file(path: str, delay: int = 300):
 def get_best_stream(url, cookie_path=None):
     ydl_opts = {
         "quiet": True,
-        "impersonate": "chrome",
+        "js_runtimes": {
+            "node": {}
+        },
         "extractor_args": {
             "youtube": {
-                "player_client": ["android", "web", "ios"]
+                "player_client": ["web"]
             }
         }
     }
