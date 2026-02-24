@@ -46,78 +46,36 @@ async def remove_file(path: str, delay: int = 300):
         os.remove(path)
 
 def get_best_stream(url, cookie_path=None):
-    logging.info(f"[STREAM] Extracting info from URL: {url}")
-
-    ydl_opts = {
-            "quiet": True,
-        "js_runtimes": {
-            "node": {}
-        },
-        "extractor_args": {
-            "youtube": {
-                "player_client": ["android", "web"]
-            }
-        }
-    }
-
+    ydl_opts = {"quiet": True}
     if cookie_path:
-        logging.info("[STREAM] Using cookie file")
         ydl_opts["cookiefile"] = cookie_path
 
     with YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=False)
 
     formats = info.get("formats", [])
-    logging.info(f"[STREAM] Total formats found: {len(formats)}")
-
     videos = [f for f in formats if f.get("vcodec") != "none"]
-    videos = sorted(
-        videos,
-        key=lambda x: (
-            x.get("height", 0),
-            x.get("fps", 0),
-            x.get("tbr", 0)
-        ),
-        reverse=True
-    )
+    videos = sorted(videos, key=lambda x: x.get("height", 0), reverse=True)
 
     if videos:
-        best = videos[0]
-        logging.info(
-            f"[STREAM] Selected format: "
-            f"{best.get('height')}p | "
-            f"{best.get('fps')}fps | "
-            f"{best.get('tbr')}kbps"
-        )
-        return best["url"]
+        return videos[0]["url"]
 
-    logging.warning("[STREAM] No video-only format found, using fallback URL")
     return info.get("url")
+
 # =========================
 # WORKER
 # =========================
 def process_media(job_id, url, start, end, mode, interval, cookie_path):
 
-    logging.info(f"[JOB {job_id}] START")
-    logging.info(f"[JOB {job_id}] Mode: {mode}")
-    logging.info(f"[JOB {job_id}] Time: {start} -> {end}")
-
+    logging.info(f"[JOB {job_id}] START | Mode: {mode} | Time: {start} -> {end}")
     try:
-        jobs_db[job_id] = {
-            "status": "processing",
-            "message": "Processing...",
-            "step": 1
-        }
+        jobs_db[job_id] = {"status": "processing", "message": "Processing...", "step": 1}
 
         stream_url = get_best_stream(url, cookie_path)
-
-        if not stream_url:
-            raise Exception("Failed to get stream URL")
-
         logging.info(f"[JOB {job_id}] Stream URL acquired")
 
         # =========================
-        # SUPER HD PNG
+        # SUPER HD (PNG LOSSLESS)
         # =========================
         if mode == "super_photo":
             final_path = f"{DOWNLOAD_DIR}/{job_id}.png"
@@ -127,18 +85,17 @@ def process_media(job_id, url, start, end, mode, interval, cookie_path):
                 "-ss", start,
                 "-i", stream_url,
                 "-frames:v", "1",
-                "-compression_level", "0",
-                "-vf", "scale=iw*2:ih*2:flags=lanczos",
+                "-vsync", "vfr",
+                "-pix_fmt", "rgb24",
                 final_path
             ]
 
         # =========================
-        # BURST
+        # BURST MODE
         # =========================
         elif mode == "burst":
-
             if not end:
-                raise Exception("Burst mode requires end time")
+                raise Exception("Burst butuh waktu end")
 
             burst_folder = f"{DOWNLOAD_DIR}/{job_id}_frames"
             os.makedirs(burst_folder, exist_ok=True)
@@ -153,20 +110,12 @@ def process_media(job_id, url, start, end, mode, interval, cookie_path):
             ]
 
             logging.info(f"[JOB {job_id}] Executing FFmpeg burst...")
-
-            process = subprocess.run(
-                cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-                text=True
-            )
-
+            process = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
             if process.returncode != 0:
-                logging.error(f"[JOB {job_id}] FFmpeg burst error:\n{process.stderr}")
-                raise Exception(process.stderr)
+                logging.error(f"[JOB {job_id}] FFmpeg burst error: {process.stderr}")
+                raise Exception(f"FFmpeg burst error: {process.stderr}")
 
             zip_path = f"{DOWNLOAD_DIR}/{job_id}.zip"
-
             with zipfile.ZipFile(zip_path, "w") as z:
                 for file in sorted(os.listdir(burst_folder)):
                     z.write(os.path.join(burst_folder, file), file)
@@ -174,7 +123,7 @@ def process_media(job_id, url, start, end, mode, interval, cookie_path):
             final_path = zip_path
 
         # =========================
-        # PHOTO JPG
+        # PHOTO BIASA (JPG)
         # =========================
         elif mode == "photo":
             final_path = f"{DOWNLOAD_DIR}/{job_id}.jpg"
@@ -189,7 +138,7 @@ def process_media(job_id, url, start, end, mode, interval, cookie_path):
             ]
 
         # =========================
-        # VIDEO
+        # VIDEO CLIP
         # =========================
         else:
             final_path = f"{DOWNLOAD_DIR}/{job_id}.mp4"
@@ -203,27 +152,15 @@ def process_media(job_id, url, start, end, mode, interval, cookie_path):
                 final_path
             ]
 
-        # Jalankan FFmpeg (kecuali burst karena sudah dijalankan)
         if mode != "burst":
             logging.info(f"[JOB {job_id}] Executing FFmpeg...")
-            logging.info(f"[JOB {job_id}] Command: {' '.join(cmd)}")
-
-            process = subprocess.run(
-                cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-                text=True
-            )
-
+            process = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
             if process.returncode != 0:
-                logging.error(f"[JOB {job_id}] FFmpeg error:\n{process.stderr}")
-                raise Exception(process.stderr)
+                logging.error(f"[JOB {job_id}] FFmpeg error: {process.stderr}")
+                raise Exception(f"FFmpeg error: {process.stderr}")
 
-        if not os.path.exists(final_path):
-            raise Exception("Output file not created")
-
-        size = os.path.getsize(final_path) / 1024 / 1024
-        logging.info(f"[JOB {job_id}] SUCCESS | File: {final_path} | {size:.2f} MB")
+        size_mb = os.path.getsize(final_path) / (1024 * 1024) if os.path.exists(final_path) else 0
+        logging.info(f"[JOB {job_id}] SUCCESS | File: {final_path} | {size_mb:.2f} MB")
 
         ext = final_path.split(".")[-1]
         jobs_db[job_id] = f"done:{ext}"
@@ -235,7 +172,7 @@ def process_media(job_id, url, start, end, mode, interval, cookie_path):
     finally:
         if cookie_path and os.path.exists(cookie_path):
             os.remove(cookie_path)
-            logging.info(f"[JOB {job_id}] Cookie cleaned")
+
 # =========================
 # API
 # =========================
@@ -287,8 +224,15 @@ def status(job_id: str):
             "status": "finished",
             "download": f"/file/{job_id}.{ext}"
         }
+    
+    if res.startswith("error"):
+        error_msg = res.split(":", 1)[1]
+        return {
+            "status": "error",
+            "message": error_msg
+        }
 
-    return {"status": "error"}
+    return {"status": "error", "message": "Unknown job state"}
 
 @app.get("/file/{name}")
 def get_file(name: str, background_tasks: BackgroundTasks):
