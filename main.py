@@ -46,21 +46,30 @@ async def remove_file(path: str, delay: int = 300):
         os.remove(path)
 
 def get_best_stream(url, cookie_path=None):
-    ydl_opts = {"quiet": True}
+    ydl_opts = {
+        "quiet": True,
+        "impersonate": "chrome",
+        "extractor_args": {
+            "youtube": {
+                "player_client": ["android", "web", "ios"]
+            }
+        }
+    }
     if cookie_path:
         ydl_opts["cookiefile"] = cookie_path
 
     with YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=False)
+        user_agent = info.get("http_headers", {}).get("User-Agent")
 
     formats = info.get("formats", [])
     videos = [f for f in formats if f.get("vcodec") != "none"]
     videos = sorted(videos, key=lambda x: x.get("height", 0), reverse=True)
 
     if videos:
-        return videos[0]["url"]
+        return videos[0]["url"], user_agent
 
-    return info.get("url")
+    return info.get("url"), user_agent
 
 # =========================
 # WORKER
@@ -71,7 +80,7 @@ def process_media(job_id, url, start, end, mode, interval, cookie_path):
     try:
         jobs_db[job_id] = {"status": "processing", "message": "Processing...", "step": 1}
 
-        stream_url = get_best_stream(url, cookie_path)
+        stream_url, user_agent = get_best_stream(url, cookie_path)
         logging.info(f"[JOB {job_id}] Stream URL acquired")
 
         # =========================
@@ -81,6 +90,15 @@ def process_media(job_id, url, start, end, mode, interval, cookie_path):
             final_path = f"{DOWNLOAD_DIR}/{job_id}.png"
 
             cmd = [
+                "ffmpeg", "-y",
+                "-user_agent", user_agent,
+                "-ss", start,
+                "-i", stream_url,
+                "-frames:v", "1",
+                "-vsync", "vfr",
+                "-pix_fmt", "rgb24",
+                final_path
+            ] if user_agent else [
                 "ffmpeg", "-y",
                 "-ss", start,
                 "-i", stream_url,
@@ -101,6 +119,14 @@ def process_media(job_id, url, start, end, mode, interval, cookie_path):
             os.makedirs(burst_folder, exist_ok=True)
 
             cmd = [
+                "ffmpeg", "-y",
+                "-user_agent", user_agent,
+                "-ss", start,
+                "-to", end,
+                "-i", stream_url,
+                "-vf", f"fps=1/{interval}",
+                f"{burst_folder}/frame_%03d.png"
+            ] if user_agent else [
                 "ffmpeg", "-y",
                 "-ss", start,
                 "-to", end,
@@ -130,6 +156,14 @@ def process_media(job_id, url, start, end, mode, interval, cookie_path):
 
             cmd = [
                 "ffmpeg", "-y",
+                "-user_agent", user_agent,
+                "-ss", start,
+                "-i", stream_url,
+                "-frames:v", "1",
+                "-q:v", "1",
+                final_path
+            ] if user_agent else [
+                "ffmpeg", "-y",
                 "-ss", start,
                 "-i", stream_url,
                 "-frames:v", "1",
@@ -144,6 +178,14 @@ def process_media(job_id, url, start, end, mode, interval, cookie_path):
             final_path = f"{DOWNLOAD_DIR}/{job_id}.mp4"
 
             cmd = [
+                "ffmpeg", "-y",
+                "-user_agent", user_agent,
+                "-ss", start,
+                "-to", end,
+                "-i", stream_url,
+                "-c", "copy",
+                final_path
+            ] if user_agent else [
                 "ffmpeg", "-y",
                 "-ss", start,
                 "-to", end,
