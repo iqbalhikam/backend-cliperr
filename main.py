@@ -46,44 +46,31 @@ async def remove_file(path: str, delay: int = 300):
         os.remove(path)
 
 def get_best_stream(url, cookie_path=None):
-    ydl_opts = {
-        "quiet": True,
-        "js_runtimes": {
-            "node": {}
-        },
-        "extractor_args": {
-            "youtube": {
-                "player_client": ["web"]
-            }
-        }
-    }
+    ydl_opts = {"quiet": True}
     if cookie_path:
         ydl_opts["cookiefile"] = cookie_path
 
     with YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=False)
-        user_agent = info.get("http_headers", {}).get("User-Agent")
 
     formats = info.get("formats", [])
     videos = [f for f in formats if f.get("vcodec") != "none"]
     videos = sorted(videos, key=lambda x: x.get("height", 0), reverse=True)
 
     if videos:
-        return videos[0]["url"], user_agent
+        return videos[0]["url"]
 
-    return info.get("url"), user_agent
+    return info.get("url")
 
 # =========================
 # WORKER
 # =========================
 def process_media(job_id, url, start, end, mode, interval, cookie_path):
 
-    logging.info(f"[JOB {job_id}] START | Mode: {mode} | Time: {start} -> {end}")
     try:
         jobs_db[job_id] = {"status": "processing", "message": "Processing...", "step": 1}
 
-        stream_url, user_agent = get_best_stream(url, cookie_path)
-        logging.info(f"[JOB {job_id}] Stream URL acquired")
+        stream_url = get_best_stream(url, cookie_path)
 
         # =========================
         # SUPER HD (PNG LOSSLESS)
@@ -92,15 +79,6 @@ def process_media(job_id, url, start, end, mode, interval, cookie_path):
             final_path = f"{DOWNLOAD_DIR}/{job_id}.png"
 
             cmd = [
-                "ffmpeg", "-y",
-                "-user_agent", user_agent,
-                "-ss", start,
-                "-i", stream_url,
-                "-frames:v", "1",
-                "-vsync", "vfr",
-                "-pix_fmt", "rgb24",
-                final_path
-            ] if user_agent else [
                 "ffmpeg", "-y",
                 "-ss", start,
                 "-i", stream_url,
@@ -122,14 +100,6 @@ def process_media(job_id, url, start, end, mode, interval, cookie_path):
 
             cmd = [
                 "ffmpeg", "-y",
-                "-user_agent", user_agent,
-                "-ss", start,
-                "-to", end,
-                "-i", stream_url,
-                "-vf", f"fps=1/{interval}",
-                f"{burst_folder}/frame_%03d.png"
-            ] if user_agent else [
-                "ffmpeg", "-y",
                 "-ss", start,
                 "-to", end,
                 "-i", stream_url,
@@ -137,11 +107,7 @@ def process_media(job_id, url, start, end, mode, interval, cookie_path):
                 f"{burst_folder}/frame_%03d.png"
             ]
 
-            logging.info(f"[JOB {job_id}] Executing FFmpeg burst...")
-            process = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
-            if process.returncode != 0:
-                logging.error(f"[JOB {job_id}] FFmpeg burst error: {process.stderr}")
-                raise Exception(f"FFmpeg burst error: {process.stderr}")
+            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
 
             zip_path = f"{DOWNLOAD_DIR}/{job_id}.zip"
             with zipfile.ZipFile(zip_path, "w") as z:
@@ -158,14 +124,6 @@ def process_media(job_id, url, start, end, mode, interval, cookie_path):
 
             cmd = [
                 "ffmpeg", "-y",
-                "-user_agent", user_agent,
-                "-ss", start,
-                "-i", stream_url,
-                "-frames:v", "1",
-                "-q:v", "1",
-                final_path
-            ] if user_agent else [
-                "ffmpeg", "-y",
                 "-ss", start,
                 "-i", stream_url,
                 "-frames:v", "1",
@@ -181,14 +139,6 @@ def process_media(job_id, url, start, end, mode, interval, cookie_path):
 
             cmd = [
                 "ffmpeg", "-y",
-                "-user_agent", user_agent,
-                "-ss", start,
-                "-to", end,
-                "-i", stream_url,
-                "-c", "copy",
-                final_path
-            ] if user_agent else [
-                "ffmpeg", "-y",
                 "-ss", start,
                 "-to", end,
                 "-i", stream_url,
@@ -197,20 +147,14 @@ def process_media(job_id, url, start, end, mode, interval, cookie_path):
             ]
 
         if mode != "burst":
-            logging.info(f"[JOB {job_id}] Executing FFmpeg...")
-            process = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+            process = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
             if process.returncode != 0:
-                logging.error(f"[JOB {job_id}] FFmpeg error: {process.stderr}")
-                raise Exception(f"FFmpeg error: {process.stderr}")
-
-        size_mb = os.path.getsize(final_path) / (1024 * 1024) if os.path.exists(final_path) else 0
-        logging.info(f"[JOB {job_id}] SUCCESS | File: {final_path} | {size_mb:.2f} MB")
+                raise Exception("FFmpeg error")
 
         ext = final_path.split(".")[-1]
         jobs_db[job_id] = f"done:{ext}"
 
     except Exception as e:
-        logging.error(f"[JOB {job_id}] FAILED: {str(e)}")
         jobs_db[job_id] = f"error:{str(e)}"
 
     finally:
@@ -268,15 +212,8 @@ def status(job_id: str):
             "status": "finished",
             "download": f"/file/{job_id}.{ext}"
         }
-    
-    if res.startswith("error"):
-        error_msg = res.split(":", 1)[1]
-        return {
-            "status": "error",
-            "message": error_msg
-        }
 
-    return {"status": "error", "message": "Unknown job state"}
+    return {"status": "error"}
 
 @app.get("/file/{name}")
 def get_file(name: str, background_tasks: BackgroundTasks):
