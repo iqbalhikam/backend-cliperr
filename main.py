@@ -175,11 +175,17 @@ def process_media(job_id, url, start, end, mode, interval, cookie_path):
             if best_audio_url:
                 cmd = [
                     "ffmpeg", "-y",
-                    "-ss", start, "-to", end, "-i", best_video_url,
-                    "-ss", start, "-to", end, "-i", best_audio_url,
-                    "-map", "0:v", "-map", "1:a",
-                    "-c", "copy",
-                    "-avoid_negative_ts", "1",
+                    "-i", best_video_url,
+                    "-i", best_audio_url,
+                    "-ss", start,
+                    "-to", end,
+                    "-map", "0:v",
+                    "-map", "1:a",
+                    "-c:v", "libx264",
+                    "-c:a", "aac",
+                    "-preset", "fast",
+                    "-crf", "18",
+                    "-avoid_negative_ts", "make_zero",
                     final_path
                 ]
             else:
