@@ -284,9 +284,9 @@ def get_file(name: str, background_tasks: BackgroundTasks):
     background_tasks.add_task(remove_file, path)
 
     if name.endswith(".png"):
-        return FileResponse(path, media_type="image/png")
+        return FileResponse(path, media_type="image/png", filename=name)
     if name.endswith(".jpg"):
-        return FileResponse(path, media_type="image/jpeg")
+        return FileResponse(path, media_type="image/jpeg", filename=name)
     if name.endswith(".zip"):
-        return FileResponse(path, media_type="application/zip")
-    return FileResponse(path, media_type="video/mp4")
+        return FileResponse(path, media_type="application/zip", filename=name)
+    return FileResponse(path, media_type="video/mp4", filename=name)
