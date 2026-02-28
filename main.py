@@ -72,9 +72,11 @@ def process_media(job_id, url, start, end, mode, interval, cookie_path):
         # ydl_opts = {"quiet": True}
         ydl_opts = {
             "quiet": True,
+            "geo_bypass": True,
+            "http_chunk_size": 10485760,
             "extractor_args": {
                 "youtube": {
-                    "player_client": ["web"]
+                    "player_client": ["android", "web"],
                 }
             }
         }
