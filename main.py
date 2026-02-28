@@ -4,90 +4,40 @@ import logging
 import asyncio
 import subprocess
 import zipfile
-
-from fastapi import (
-    FastAPI,
-    BackgroundTasks,
-    Form,
-    File,
-    UploadFile,
-    HTTPException,
-    Request
-)
+from fastapi import FastAPI, BackgroundTasks, Form, File, UploadFile, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from yt_dlp import YoutubeDL
 
-# Rate limit
-from slowapi import Limiter
-from slowapi.util import get_remote_address
-from slowapi.middleware import SlowAPIMiddleware
-
 # =========================
-# CONFIG
-# =========================
-API_KEY = os.getenv("MY_SECRET_API_KEY")
-ALLOWED_ORIGIN = os.getenv("ALLOWED_ORIGIN")
-
-if not API_KEY:
-    raise Exception("MY_SECRET_API_KEY not set")
-
-DOWNLOAD_DIR = "/tmp/downloads"
-COOKIE_DIR = "/tmp/cookies"
-MAX_DURATION = 600  # 10 menit max
-
-os.makedirs(DOWNLOAD_DIR, exist_ok=True)
-os.makedirs(COOKIE_DIR, exist_ok=True)
-
-# =========================
-# LOGGING
+# LOGGING SETUP
 # =========================
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [APP] %(message)s"
 )
 
-# =========================
-# APP INIT
-# =========================
 app = FastAPI()
 
-# CORS (tidak wildcard)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[ALLOWED_ORIGIN] if ALLOWED_ORIGIN else [],
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["POST", "GET"],
+    allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Rate limiter
-limiter = Limiter(key_func=get_remote_address)
-app.state.limiter = limiter
-app.add_middleware(SlowAPIMiddleware)
+DOWNLOAD_DIR = "/tmp/downloads"
+COOKIE_DIR = "/tmp/cookies"
 
-# =========================
-# AUTH MIDDLEWARE
-# =========================
-@app.middleware("http")
-async def verify_api_key(request: Request, call_next):
+os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+os.makedirs(COOKIE_DIR, exist_ok=True)
 
-    # File endpoint boleh tanpa API key
-    if request.url.path.startswith("/file"):
-        return await call_next(request)
-
-    client_key = request.headers.get("x-api-key")
-
-    if client_key != API_KEY:
-        raise HTTPException(status_code=403, detail="Unauthorized")
-
-    return await call_next(request)
-
-# =========================
-# UTILITIES
-# =========================
 jobs_db = {}
 
+# =========================
+# PARSE TIME
+# =========================
 def parse_time(t: str) -> float:
     t = str(t).strip()
     if t.isdigit():
@@ -99,15 +49,14 @@ def parse_time(t: str) -> float:
         return p[0]*60 + p[1]
     return float(p[0])
 
+# =========================
+# AUTO CLEANUP
+# =========================
 async def remove_file(path: str, delay: int = 300):
     await asyncio.sleep(delay)
     if os.path.exists(path):
         os.remove(path)
         logging.info(f"Auto deleted: {path}")
-
-def validate_youtube_url(url: str):
-    if "youtube.com" not in url and "youtu.be" not in url:
-        raise HTTPException(status_code=400, detail="Only YouTube URL allowed")
 
 # =========================
 # CORE PROCESSOR
@@ -117,49 +66,141 @@ def process_media(job_id, url, start, end, mode, interval, cookie_path):
     final_path = None
 
     try:
-        logging.info(f"[JOB {job_id}] START")
-        jobs_db[job_id] = {"status": "processing", "step": 1}
+        logging.info(f"[JOB {job_id}] START | Mode: {mode}")
+        jobs_db[job_id] = {"status": "processing", "message": "Extracting stream...", "step": 1}
 
         ydl_opts = {"quiet": True}
         if cookie_path:
             ydl_opts["cookiefile"] = cookie_path
+            logging.info(f"[JOB {job_id}] Using cookies")
 
         with YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
 
         formats = info.get("formats", [])
 
-        videos = [f for f in formats if f.get("vcodec") != "none"]
-        videos = sorted(videos, key=lambda x: (x.get("height", 0), x.get("tbr", 0)), reverse=True)
+        # Detect separated stream
+        videos = [f for f in formats if f.get("vcodec") != "none" and f.get("acodec") == "none"]
+        audios = [f for f in formats if f.get("acodec") != "none" and f.get("vcodec") == "none"]
 
-        if not videos:
-            raise Exception("No video stream found")
+        best_video_url = None
+        best_audio_url = None
 
-        best_video_url = videos[0]["url"]
+        if videos:
+            videos = sorted(videos, key=lambda x: (x.get("height", 0), x.get("tbr", 0)), reverse=True)
+            best_video_url = videos[0]["url"]
+
+        if audios:
+            audios = sorted(audios, key=lambda x: x.get("tbr", 0)), 
+            best_audio_url = audios[0][0]["url"]
+
+        # Fallback combined
+        if not best_video_url:
+            combined = [f for f in formats if f.get("vcodec") != "none" and f.get("acodec") != "none"]
+            if combined:
+                combined = sorted(combined, key=lambda x: (x.get("height", 0), x.get("tbr", 0)), reverse=True)
+                best_video_url = combined[0]["url"]
+
+        if not best_video_url:
+            raise Exception("No valid video stream found")
 
         jobs_db[job_id]["step"] = 2
+        jobs_db[job_id]["message"] = "Processing media..."
 
-        final_path = f"{DOWNLOAD_DIR}/{job_id}.mp4"
+        # =========================
+        # SUPER HD PNG
+        # =========================
+        if mode == "super_photo":
+            final_path = f"{DOWNLOAD_DIR}/{job_id}.png"
 
-        cmd = [
-            "ffmpeg", "-y",
-            "-ss", start,
-            "-to", end,
-            "-i", best_video_url,
-            "-c", "copy",
-            "-avoid_negative_ts", "1",
-            final_path
-        ]
+            cmd = [
+                "ffmpeg", "-y",
+                "-ss", start,
+                "-i", best_video_url,
+                "-frames:v", "1",
+                "-compression_level", "0",
+                "-vf", "scale=iw:ih:flags=lanczos",
+                final_path
+            ]
 
-        process = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        # =========================
+        # BURST MODE
+        # =========================
+        elif mode == "burst":
+            if not end:
+                raise Exception("Burst mode membutuhkan waktu end")
 
-        if process.returncode != 0:
-            raise Exception(process.stderr.decode())
+            burst_folder = f"{DOWNLOAD_DIR}/{job_id}_frames"
+            os.makedirs(burst_folder, exist_ok=True)
+
+            cmd = [
+                "ffmpeg", "-y",
+                "-ss", start,
+                "-to", end,
+                "-i", best_video_url,
+                "-vf", f"fps=1/{interval}",
+                f"{burst_folder}/frame_%03d.png"
+            ]
+
+            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+
+            zip_path = f"{DOWNLOAD_DIR}/{job_id}.zip"
+            with zipfile.ZipFile(zip_path, "w") as z:
+                for file in sorted(os.listdir(burst_folder)):
+                    z.write(os.path.join(burst_folder, file), file)
+
+            final_path = zip_path
+
+        # =========================
+        # NORMAL PHOTO
+        # =========================
+        elif mode == "photo":
+            final_path = f"{DOWNLOAD_DIR}/{job_id}.jpg"
+
+            cmd = [
+                "ffmpeg", "-y",
+                "-ss", start,
+                "-i", best_video_url,
+                "-frames:v", "1",
+                "-q:v", "1",
+                final_path
+            ]
+
+        # =========================
+        # VIDEO CLIP
+        # =========================
+        else:
+            final_path = f"{DOWNLOAD_DIR}/{job_id}.mp4"
+
+            if best_audio_url:
+                cmd = [
+                    "ffmpeg", "-y",
+                    "-ss", start, "-to", end, "-i", best_video_url,
+                    "-ss", start, "-to", end, "-i", best_audio_url,
+                    "-map", "0:v", "-map", "1:a",
+                    "-c", "copy",
+                    "-avoid_negative_ts", "1",
+                    final_path
+                ]
+            else:
+                cmd = [
+                    "ffmpeg", "-y",
+                    "-ss", start, "-to", end, "-i", best_video_url,
+                    "-c", "copy",
+                    "-avoid_negative_ts", "1",
+                    final_path
+                ]
+
+        if mode != "burst":
+            process = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            if process.returncode != 0:
+                raise Exception(process.stderr.decode())
 
         if not os.path.exists(final_path):
             raise Exception("Output file not created")
 
-        jobs_db[job_id] = "done:mp4"
+        ext = final_path.split(".")[-1]
+        jobs_db[job_id] = f"done:{ext}"
 
         logging.info(f"[JOB {job_id}] DONE")
 
@@ -175,49 +216,51 @@ def process_media(job_id, url, start, end, mode, interval, cookie_path):
 # API
 # =========================
 @app.post("/download")
-@limiter.limit("5/minute")
 async def start_download(
-    request: Request,
     background_tasks: BackgroundTasks,
     url: str = Form(...),
     start: str = Form(...),
-    end: str = Form(...)
+    end: str | None = Form(None),
+    mode: str = Form("video"),
+    interval: int = Form(2),
+    cookie: UploadFile | None = File(default=None)
 ):
-
-    validate_youtube_url(url)
-
     try:
         start_sec = parse_time(start)
-        end_sec = parse_time(end)
+        end_sec = parse_time(end) if end else None
 
-        if end_sec <= start_sec:
-            raise HTTPException(status_code=400, detail="End must be greater")
-
-        if end_sec - start_sec > MAX_DURATION:
-            raise HTTPException(status_code=400, detail="Max duration 10 minutes")
+        if mode == "video":
+            if end_sec is None or end_sec <= start_sec:
+                raise HTTPException(status_code=400, detail="End harus lebih besar dari start")
 
     except:
-        raise HTTPException(status_code=400, detail="Invalid time format")
+        raise HTTPException(status_code=400, detail="Format waktu tidak valid")
 
     job_id = str(uuid.uuid4())
-    jobs_db[job_id] = {"status": "processing", "step": 1}
+    cookie_path = None
+
+    if cookie:
+        cookie_path = f"{COOKIE_DIR}/{job_id}.txt"
+        with open(cookie_path, "wb") as f:
+            f.write(await cookie.read())
+
+    jobs_db[job_id] = {"status": "processing", "message": "Waiting...", "step": 1}
 
     background_tasks.add_task(
         process_media,
         job_id,
         url,
         str(start_sec),
-        str(end_sec),
-        "video",
-        2,
-        None
+        str(end_sec) if end_sec else None,
+        mode,
+        interval,
+        cookie_path
     )
 
     return {"job_id": job_id}
 
 @app.get("/status/{job_id}")
 def status(job_id: str):
-
     res = jobs_db.get(job_id)
 
     if not res:
@@ -227,21 +270,23 @@ def status(job_id: str):
         return res
 
     if res.startswith("done"):
-        return {
-            "status": "finished",
-            "download": f"/file/{job_id}.mp4"
-        }
+        ext = res.split(":")[1]
+        return {"status": "finished", "download": f"/file/{job_id}.{ext}"}
 
     return {"status": "error", "msg": res}
 
 @app.get("/file/{name}")
 def get_file(name: str, background_tasks: BackgroundTasks):
-
     path = f"{DOWNLOAD_DIR}/{name}"
-
     if not os.path.exists(path):
         raise HTTPException(status_code=404)
 
     background_tasks.add_task(remove_file, path)
 
+    if name.endswith(".png"):
+        return FileResponse(path, media_type="image/png", filename=name)
+    if name.endswith(".jpg"):
+        return FileResponse(path, media_type="image/jpeg", filename=name)
+    if name.endswith(".zip"):
+        return FileResponse(path, media_type="application/zip", filename=name)
     return FileResponse(path, media_type="video/mp4", filename=name)
