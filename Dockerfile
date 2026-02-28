@@ -1,9 +1,18 @@
 FROM python:3.11-slim
 
 # install ffmpeg
-RUN apt-get update && \
-    apt-get install -y ffmpeg && \
-    rm -rf /var/lib/apt/lists/*
+# RUN apt-get update && \
+#     apt-get install -y ffmpeg && \
+#     rm -rf /var/lib/apt/lists/*
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    ffmpeg \
+    curl \
+    ca-certificates \
+    nodejs \
+    npm \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
