@@ -61,7 +61,8 @@ async def remove_file(path: str, delay: int = 300):
 # =========================
 # CORE PROCESSOR
 # =========================
-def process_media(job_id, url, start, end, mode, interval, cookie_path):
+# Tambahkan crop_w, crop_h, crop_x, crop_y dengan default None
+def process_media(job_id, url, start, end, mode, interval, cookie_path, crop_w=None, crop_h=None, crop_x=None, crop_y=None):
 
     final_path = None
 
@@ -113,15 +114,23 @@ def process_media(job_id, url, start, end, mode, interval, cookie_path):
         if mode == "super_photo":
             final_path = f"{DOWNLOAD_DIR}/{job_id}.png"
 
+            # Filter bawaan untuk menjaga kualitas tetap HD
+            vf_filter = "scale=iw:ih:flags=lanczos"
+
+            # Jika koordinat crop dikirimkan, terapkan filter crop sebelum di-scale
+            if crop_w and crop_h and crop_x and crop_y:
+                vf_filter = f"crop={crop_w}:{crop_h}:{crop_x}:{crop_y},scale=iw:ih:flags=lanczos"
+
             cmd = [
                 "ffmpeg", "-y",
                 "-ss", start,
                 "-i", best_video_url,
                 "-frames:v", "1",
                 "-compression_level", "0",
-                "-vf", "scale=iw:ih:flags=lanczos",
+                "-vf", vf_filter,  # Gunakan variabel filter yang dinamis
                 final_path
             ]
+
 
         # =========================
         # BURST MODE
@@ -223,6 +232,12 @@ async def start_download(
     end: str | None = Form(None),
     mode: str = Form("video"),
     interval: int = Form(2),
+    # --- TAMBAHAN BARU UNTUK FITUR CROP ---
+    crop_w: str | None = Form(None),
+    crop_h: str | None = Form(None),
+    crop_x: str | None = Form(None),
+    crop_y: str | None = Form(None),
+    # --------------------------------------
     cookie: UploadFile | None = File(default=None)
 ):
     try:
@@ -246,6 +261,7 @@ async def start_download(
 
     jobs_db[job_id] = {"status": "processing", "message": "Waiting...", "step": 1}
 
+    # Teruskan parameter crop baru ini ke background task
     background_tasks.add_task(
         process_media,
         job_id,
@@ -254,11 +270,20 @@ async def start_download(
         str(end_sec) if end_sec else None,
         mode,
         interval,
-        cookie_path
+        cookie_path,
+        # --- TAMBAHAN BARU ---
+        crop_w,
+        crop_h,
+        crop_x,
+        crop_y
     )
 
     return {"job_id": job_id}
 
+
+# =========================
+# STATUS
+# =========================
 @app.get("/status/{job_id}")
 def status(job_id: str):
     res = jobs_db.get(job_id)
