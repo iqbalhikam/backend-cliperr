@@ -1,7 +1,10 @@
 import os
+import sys
 import uuid
 import logging
 import asyncio
+import time
+import shutil
 import subprocess
 import zipfile
 from fastapi import FastAPI, BackgroundTasks, Form, File, UploadFile, HTTPException
@@ -14,7 +17,8 @@ from yt_dlp import YoutubeDL
 # =========================
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [APP] %(message)s"
+    format="%(asctime)s [APP] %(message)s",
+    stream=sys.stdout
 )
 
 app = FastAPI()
@@ -52,11 +56,33 @@ def parse_time(t: str) -> float:
 # =========================
 # AUTO CLEANUP
 # =========================
-async def remove_file(path: str, delay: int = 300):
-    await asyncio.sleep(delay)
+async def remove_file(path: str, delay: int = 0):
+    if delay > 0:
+        await asyncio.sleep(delay)
     if os.path.exists(path):
         os.remove(path)
         logging.info(f"Auto deleted: {path}")
+
+async def periodic_cleanup():
+    while True:
+        await asyncio.sleep(600)  # Cek setiap 10 menit
+        now = time.time()
+        logging.info("Running periodic cleanup...")
+        if os.path.exists(DOWNLOAD_DIR):
+            for filename in os.listdir(DOWNLOAD_DIR):
+                path = os.path.join(DOWNLOAD_DIR, filename)
+                if os.path.isfile(path):
+                    # Hapus jika lebih lama dari 1 jam (3600 detik)
+                    if now - os.path.getmtime(path) > 3600:
+                        try:
+                            os.remove(path)
+                            logging.info(f"Periodic cleanup deleted: {path}")
+                        except Exception as e:
+                            logging.error(f"Error deleting {path}: {e}")
+
+@app.on_event("startup")
+async def startup_event():
+    asyncio.create_task(periodic_cleanup())
 
 # =========================
 # CORE PROCESSOR
@@ -301,13 +327,36 @@ def status(job_id: str):
 
     return {"status": "error", "msg": res}
 
+@app.post("/cancel/{job_id}")
+async def cancel_job(job_id: str):
+    res = jobs_db.get(job_id)
+    if not res:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    # Jika sudah selesai, hapus filenya
+    if isinstance(res, str) and res.startswith("done:"):
+        ext = res.split(":")[1]
+        path = f"{DOWNLOAD_DIR}/{job_id}.{ext}"
+        if os.path.exists(path):
+            os.remove(path)
+            logging.info(f"Deleted on cancel: {path}")
+    
+    # Kasus burst mode (folder frames)
+    burst_folder = f"{DOWNLOAD_DIR}/{job_id}_frames"
+    if os.path.exists(burst_folder):
+        shutil.rmtree(burst_folder)
+        logging.info(f"Deleted frames on cancel: {burst_folder}")
+
+    jobs_db[job_id] = "cancelled"
+    return {"status": "cancelled"}
+
 @app.get("/file/{name}")
 def get_file(name: str, background_tasks: BackgroundTasks):
     path = f"{DOWNLOAD_DIR}/{name}"
     if not os.path.exists(path):
         raise HTTPException(status_code=404)
 
-    background_tasks.add_task(remove_file, path)
+    background_tasks.add_task(remove_file, path, 0)
 
     if name.endswith(".png"):
         return FileResponse(path, media_type="image/png", filename=name)
