@@ -119,7 +119,8 @@ def process_media(job_id, url, start, end, mode, interval, cookie_path, crop_w=N
 
             # Jika koordinat crop dikirimkan, terapkan filter crop sebelum di-scale
             if crop_w and crop_h and crop_x and crop_y:
-                vf_filter = f"crop={crop_w}:{crop_h}:{crop_x}:{crop_y},scale=iw:ih:flags=lanczos"
+                vf_filter = f"crop={crop_w}:{crop_h}:{crop_x}:{crop_y},scale=-1:1440:flags=lanczos"
+                # vf_filter = f"crop={crop_w}:{crop_h}:{crop_x}:{crop_y},scale=iw:ih:flags=lanczos"
 
             cmd = [
                 "ffmpeg", "-y",
