@@ -88,6 +88,8 @@ async def startup_event():
 # CORE PROCESSOR
 # =========================
 # Tambahkan crop_w, crop_h, crop_x, crop_y dengan default None
+
+
 def process_media(job_id, url, start, end, mode, interval, cookie_path, crop_w=None, crop_h=None, crop_x=None, crop_y=None):
 
     final_path = None
