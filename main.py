@@ -4,7 +4,8 @@ import logging
 import asyncio
 import subprocess
 import zipfile
-from fastapi import FastAPI, BackgroundTasks, Form, File, UploadFile, HTTPException
+from fastapi import FastAPI, BackgroundTasks, Form, File, UploadFile, HTTPException, Security, Depends
+from fastapi.security import APIKeyHeader
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from yt_dlp import YoutubeDL
@@ -18,6 +19,18 @@ logging.basicConfig(
 )
 
 app = FastAPI()
+
+# Sebaiknya ambil dari Environment Variable (os.getenv("API_KEY")) agar lebih aman
+API_KEY_SECRET = os.getenv("API_KEY", "KUNCI_RAHASIA_SAYA_123") 
+api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+def verify_api_key(api_key: str = Security(api_key_header)):
+    if api_key != API_KEY_SECRET:
+        raise HTTPException(
+            status_code=401,
+            detail="Akses Ditolak: API Key tidak valid atau tidak ditemukan"
+        )
+    return api_key
 
 app.add_middleware(
     CORSMiddleware,
@@ -225,7 +238,7 @@ def process_media(job_id, url, start, end, mode, interval, cookie_path, crop_w=N
 # =========================
 # API
 # =========================
-@app.post("/download")
+@app.post("/download", dependencies=[Depends(verify_api_key)])
 async def start_download(
     background_tasks: BackgroundTasks,
     url: str = Form(...),
@@ -285,7 +298,7 @@ async def start_download(
 # =========================
 # STATUS
 # =========================
-@app.get("/status/{job_id}")
+@app.get("/status/{job_id}", dependencies=[Depends(verify_api_key)])
 def status(job_id: str):
     res = jobs_db.get(job_id)
 
